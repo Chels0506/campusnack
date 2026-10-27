@@ -32,6 +32,8 @@ a { color: inherit; }
 .icon-button:hover,.plain-button:hover { background:#edf2e8; }
 .share-button { border:1px solid #dfe6d8; background:#f7f9f2; color:var(--green); padding:9px 12px; border-radius:10px; font-size:12px; font-weight:800; white-space:nowrap; }
 .share-button:hover { background:#eaf1e2; }
+.share-button[hidden] { display:none; }
+.auth-actions { display:flex; align-items:center; gap:8px; }
 .page { width:min(1320px,100%); margin:auto; padding:32px 26px 56px; }
 .customer-layout { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:28px; align-items:start; }
 .welcome { display:flex; justify-content:space-between; align-items:center; margin:4px 0 24px; }
@@ -57,6 +59,7 @@ h1 { font-size:34px; margin:7px 0 5px; }
 .food-card { background:var(--paper); border:1px solid var(--line); border-radius:17px; overflow:hidden; position:relative; transition:transform .18s, box-shadow .18s; }
 .food-card:hover { transform:translateY(-3px); box-shadow:var(--shadow); }
 .food-art { height:142px; display:grid; place-items:center; font-size:65px; background:linear-gradient(135deg,#f5eddb,#f7f3e7); position:relative; }
+.food-art img { width:100%; height:100%; object-fit:cover; }
 .food-art .tag { position:absolute; left:12px; top:12px; background:white; padding:5px 9px; border-radius:20px; font-size:10px; font-weight:800; color:var(--green); }
 .like { position:absolute; top:10px; right:10px; border:0; background:white; width:32px; height:32px; border-radius:50%; font-size:17px; color:#b5b6b0; }
 .like.liked { color:#d65957; }
@@ -113,6 +116,10 @@ h1 { font-size:34px; margin:7px 0 5px; }
 .field { margin:12px 0; }
 .field label { display:block; font-size:12px; font-weight:700; margin-bottom:6px; color:#48584d; }
 .field input,.field select { width:100%; height:43px; border:1px solid #dfe3d8; background:white; border-radius:9px; padding:0 12px; color:var(--ink); }
+.field input[type="file"] { height:auto; padding:9px; font-size:12px; }
+.field-help { display:block; margin-top:6px; color:var(--muted); font-size:10px; line-height:1.45; }
+.menu-image-preview { display:block; width:100%; max-height:190px; object-fit:contain; margin-top:9px; border:1px solid var(--line); border-radius:10px; background:#f7f7f1; }
+#remove-item-image { margin-top:8px; }
 .field-grid { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
 .auth-notice { margin-top:14px; border-radius:10px; padding:11px; background:#f5f2e7; color:#777055; font-size:11px; line-height:1.5; }
 .staff-code-help { color:#8b6a36; font-size:11px; margin-top:6px; }
@@ -133,6 +140,7 @@ h1 { font-size:34px; margin:7px 0 5px; }
 .staff-header { display:flex; justify-content:space-between; align-items:center; gap:15px; margin-bottom:22px; }
 .staff-header h1 { font-size:29px; margin:5px 0; }
 .live-pill { background:#e6f3e2; color:#347c49; border-radius:20px; padding:8px 12px; font-size:11px; font-weight:800; }
+.live-pill.sync-error { background:#fde8e5; color:var(--red); }
 .staff-nav { display:flex; gap:8px; margin-bottom:18px; overflow:auto; }
 .staff-content { background:var(--paper); border:1px solid var(--line); border-radius:17px; padding:21px; min-height:250px; }
 .table-wrap { overflow:auto; }
@@ -144,11 +152,12 @@ td { padding:13px 11px; border-bottom:1px solid #eff0e9; }
 .staff-item:last-child { border-bottom:0; }
 .staff-item-name { display:flex; align-items:center; gap:10px; }
 .small-emoji { font-size:25px; width:38px; height:38px; display:grid; place-items:center; background:#f4efe2; border-radius:10px; }
+.staff-menu-image { width:42px; height:42px; object-fit:cover; border-radius:10px; }
 .stock-low { color:var(--red); font-weight:800; }
 .secondary { border:1px solid var(--line); background:white; border-radius:9px; padding:8px 10px; color:var(--green); font-size:11px; font-weight:700; }
 .secondary:hover { background:#f3f6ed; }
 .modal-backdrop { position:fixed; inset:0; background:#14241dbb; display:grid; place-items:center; padding:18px; z-index:10; }
-.modal { width:min(440px,100%); border-radius:18px; background:white; padding:23px; box-shadow:var(--shadow); }
+.modal { width:min(440px,100%); max-height:calc(100vh - 36px); overflow-y:auto; border-radius:18px; background:white; padding:23px; box-shadow:var(--shadow); }
 .modal-head { display:flex; justify-content:space-between; align-items:center; }
 .modal-head h2 { margin:0; font-size:20px; }
 .close-button { border:0; background:#f1f2ec; border-radius:50%; width:32px; height:32px; }
@@ -161,6 +170,7 @@ td { padding:13px 11px; border-bottom:1px solid #eff0e9; }
 .share-link-label { display:block; margin-bottom:6px; font-size:12px; font-weight:700; }
 .share-url { width:100%; padding:10px 11px; border:1px solid var(--line); border-radius:9px; color:var(--green); background:#fafbf7; font-size:12px; }
 .copy-share-link { margin-top:10px; width:100%; }
+.share-install-button { margin-top:8px; width:100%; }
 .share-note { color:var(--muted); font-size:10px; line-height:1.5; margin:11px 0 0; }
 .tracker-box { background:#f3f7ed; padding:16px; border-radius:12px; margin-top:15px; }
 .tracker-box strong { color:var(--green); }
@@ -196,6 +206,7 @@ td { padding:13px 11px; border-bottom:1px solid #eff0e9; }
   .auth-art { min-height:225px; padding:25px 24px; }
   .auth-brand-row .brand { font-size:18px; }
   .auth-brand-row .share-button { padding:8px 9px; font-size:11px; }
+  .auth-actions { gap:5px; }
   .auth-art h1 { font-size:31px; max-width:350px; margin:24px 0 8px; }
   .auth-art .subtle { font-size:12px; margin-bottom:0; max-width:290px; }
   .auth-art .auth-illustration { font-size:65px; right:22px; bottom:28px; }
@@ -209,4 +220,10 @@ td { padding:13px 11px; border-bottom:1px solid #eff0e9; }
   .food-info { padding:10px; }
   .food-art { height:108px; font-size:55px; }
   .section-heading h2 { font-size:18px; }
+  .top-actions [data-share-app] { display:none; }
+  .top-actions [data-install-app] { font-size:0; padding:8px 9px; }
+  .top-actions [data-install-app]::after { content:"Add to Home"; font-size:11px; }
+  .top-actions .user-chip { display:none; }
+  .auth-brand-row { flex-wrap:wrap; }
+  .auth-actions { width:100%; justify-content:flex-end; }
 }

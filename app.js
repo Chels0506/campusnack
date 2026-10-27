@@ -5,6 +5,7 @@ const STORAGE = {
   likes: "campusnack.likes"
 };
 const STAFF_CODE = "EAPIHS2009";
+const firebaseConfig = window.CAMPUSNACK_FIREBASE_CONFIG || {};
 const statuses = ["Received", "Preparing", "Ready for pickup", "Completed"];
 const initialMenu = [
   { id: "chicken-meal", name: "Crispy Chicken Meal", category: "Meals", description: "Golden chicken, rice & gravy", price: 85, points: 8, stock: 18, emoji: "🍗", tag: "Canteen favorite" },
@@ -45,11 +46,39 @@ let payment = "Wallet";
 let customerTab = "Menu";
 let staffTab = "Orders";
 let toastTimer;
+let installPrompt = null;
+let firebaseAuth = null;
+let ordersDatabase = null;
+let orderSubscription = null;
+let realtimeEnabled = false;
+let realtimeSetupError = null;
+let realtimeStatus = "connecting";
+
+function setupRealtime() {
+  const configValues = ["apiKey", "authDomain", "databaseURL", "projectId", "appId"];
+  const configuredValues = configValues.filter(key => Boolean(firebaseConfig[key]));
+  if (!configuredValues.length) return;
+  if (configuredValues.length !== configValues.length) {
+    throw new Error("Firebase config is incomplete. Fill in all settings in firebase-config.js.");
+  }
+  if (!window.firebase?.initializeApp || !window.firebase.database) {
+    throw new Error("Firebase SDK failed to load. Check your internet connection and reload.");
+  }
+  const app = window.firebase.apps.length ? window.firebase.app() : window.firebase.initializeApp(firebaseConfig);
+  firebaseAuth = app.auth();
+  ordersDatabase = app.database();
+  realtimeEnabled = true;
+}
 
 const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 }[char]));
 const money = amount => `₱${Number(amount).toFixed(2)}`;
+const dateKey = value => {
+  const date = new Date(value);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+};
+const todayOrders = () => orders.filter(order => dateKey(order.createdAt) === dateKey(Date.now()));
 const customerOrders = () => orders.filter(order => order.owner === profile?.id).sort((a, b) => b.createdAt - a.createdAt);
 const currentPoints = () => (profile?.points || 0) + customerOrders().filter(order => order.status === "Completed").reduce((sum, order) => sum + order.points, 0);
 
@@ -73,7 +102,7 @@ function renderLogin(selectedRole = "Student") {
   document.getElementById("app").innerHTML = `
     <main class="auth-wrap">
       <section class="auth-art">
-        <div class="auth-brand-row"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><button class="share-button" data-share-app type="button">▦ Share app</button></div>
+        <div class="auth-brand-row"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div class="auth-actions"><button class="share-button" data-install-app aria-label="Add to Home Screen" type="button">＋ Add to Home Screen</button><button class="share-button" data-share-app type="button">▦ Share app</button></div></div>
         <div>
           <div class="eyebrow" style="color:#d6ef9f">Your school canteen, reimagined</div>
           <h1>Good food.<br><span>Good day.</span></h1>
@@ -85,14 +114,14 @@ function renderLogin(selectedRole = "Student") {
         <form class="auth-form" id="login-form">
           <div class="eyebrow">Welcome to the canteen</div>
           <h2>${selectedRole === "Staff" ? "Canteen staff sign in" : "Let's get you started"}</h2>
-          <p class="subtle">${selectedRole === "Staff" ? "Enter your name and private staff code to continue." : "Sign in with your school details to continue."}</p>
+          <p class="subtle">${selectedRole === "Staff" ? realtimeEnabled ? "Sign in with your Firebase staff account." : "Enter your name and local demo staff code to continue." : "Sign in with your school details to continue."}</p>
           <div class="role-switch" aria-label="Choose account type">
             ${["Student", "Teacher", "Staff"].map(role => `<button type="button" class="${role === selectedRole ? "active" : ""}" data-role="${role}">${role}</button>`).join("")}
           </div>
           <div class="field"><label for="full-name">Full name</label><input id="full-name" name="name" autocomplete="name" placeholder="e.g. Alex Santos" required></div>
+          <div class="field"><label for="gmail-address">Gmail address</label><input id="gmail-address" name="email" type="email" autocomplete="email" placeholder="you@gmail.com" required pattern="^[^@\\s]+@gmail\\.com$" title="Use a Gmail address ending in @gmail.com"></div>
           ${selectedRole === "Staff" ? `
-            <div class="field"><label for="school-id">Employee ID <span class="subtle">(optional)</span></label><input id="school-id" name="schoolId" autocomplete="off" placeholder="Enter employee ID if you have one"></div>
-            <div class="field"><label for="staff-code">Private staff code</label><input id="staff-code" name="staffCode" type="password" autocomplete="off" placeholder="Enter your canteen staff code" required><div class="staff-code-help">Staff access is intended for authorized canteen staff.</div></div>
+            ${realtimeEnabled ? `<div class="field"><label for="staff-password">Firebase password</label><input id="staff-password" name="staffPassword" type="password" autocomplete="current-password" placeholder="Enter your staff account password" required></div>` : `<div class="field"><label for="school-id">Employee ID <span class="subtle">(optional)</span></label><input id="school-id" name="schoolId" autocomplete="off" placeholder="Enter employee ID if you have one"></div><div class="field"><label for="staff-code">Local demo staff code</label><input id="staff-code" name="staffCode" type="password" autocomplete="off" placeholder="Enter the local demo code" required><div class="staff-code-help">This code is not secure authentication and must not be used for a live queue.</div></div>`}
           ` : `
             <div class="field-grid">
               <div class="field"><label for="grade-level">${selectedRole === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="grade-level" name="grade" placeholder="${selectedRole === "Teacher" ? "e.g. Mathematics" : "e.g. Grade 10"}" required></div>
@@ -100,36 +129,85 @@ function renderLogin(selectedRole = "Student") {
             </div>
             <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID" : "LRN"}</label><input id="school-id" name="schoolId" placeholder="${selectedRole === "Teacher" ? "Enter employee ID" : "Enter learner reference number"}" required></div>
           `}
-          <button class="primary" type="submit">${selectedRole === "Staff" ? "Sign in as Canteen Staff" : `Continue as ${selectedRole}`}</button>
-          <div class="auth-notice">Your details and activity are saved only in this browser on this device. This demo does not connect to a school account system.</div>
+          <button class="primary" type="submit" ${realtimeSetupError ? "disabled" : ""}>${selectedRole === "Staff" ? "Sign in as Canteen Staff" : `Continue as ${selectedRole}`}</button>
+          <div class="auth-notice">${realtimeSetupError ? "Firebase setup is unavailable. Correct the configuration or restore the Firebase SDK connection, then reload. Sign-in is disabled." : realtimeEnabled ? "Student and teacher sessions use Firebase anonymous authentication. Staff sign-in requires an Email/Password Firebase account whose UID is allowlisted in the Realtime Database rules." : "Use a Gmail address ending in @gmail.com. This local demo checks the address format only; it does not verify your Google account. Information is saved only in this browser on this device."}</div>
         </form>
       </section>
     </main>
     <div id="modal-root"></div>`;
-  let role = selectedRole;
-  document.querySelectorAll("[data-role]").forEach(button => button.addEventListener("click", () => renderLogin(button.dataset.role)));
-  bindShareApp();
-  document.getElementById("login-form").addEventListener("submit", event => {
+    let role = selectedRole;
+    document.querySelectorAll("[data-role]").forEach(button => button.addEventListener("click", () => renderLogin(button.dataset.role)));
+    bindShareApp();
+    bindInstallApp();
+    document.getElementById("login-form").addEventListener("submit", event => {
     event.preventDefault();
+    if (realtimeSetupError) {
+      toast("Firebase setup is unavailable. Sign-in is disabled until it is fixed.");
+      return;
+    }
     const form = new FormData(event.currentTarget);
-    if (role === "Staff" && form.get("staffCode") !== STAFF_CODE) {
+    if (role === "Staff" && !realtimeEnabled && form.get("staffCode") !== STAFF_CODE) {
       toast("That staff code isn't correct.");
+      return;
+    }
+    const email = String(form.get("email") || "").trim();
+    if (!/^[^@\s]+@gmail\.com$/i.test(email)) {
+      toast("Please use a Gmail address ending in @gmail.com.");
       return;
     }
     const schoolId = String(form.get("schoolId") || "").trim();
     const name = String(form.get("name")).trim();
     const roleKey = role.toLowerCase();
-    profile = {
-      id: `${roleKey}:${(schoolId || name).toLowerCase()}`,
+    const completeSignIn = async () => {
+      let userId = `${roleKey}:${(schoolId || name).toLowerCase()}`;
+      if (realtimeEnabled) {
+        try {
+          const credential = role === "Staff"
+            ? await firebaseAuth.signInWithEmailAndPassword(email, String(form.get("staffPassword") || ""))
+            : await firebaseAuth.signInAnonymously();
+          userId = credential.user.uid;
+        } catch (error) {
+          console.error("Firebase sign-in failed.", error);
+          toast(role === "Staff" ? "Staff sign-in failed. Check the Firebase account and password." : "Could not connect to the shared order service. Please try again.");
+          return;
+        }
+      }
+      profile = {
+      id: userId,
       name,
+      email,
       grade: String(form.get("grade") || "").trim(),
       section: String(form.get("section") || "").trim(),
       schoolId,
       role,
       points: 0
+      };
+      write(STORAGE.profile, profile);
+      connectOrderSync();
+      render();
     };
-    write(STORAGE.profile, profile);
-    render();
+    completeSignIn();
+  });
+}
+
+function connectOrderSync() {
+  if (!realtimeEnabled || !firebaseAuth.currentUser || !profile) return;
+  if (orderSubscription) orderSubscription.off("value");
+  const user = firebaseAuth.currentUser;
+  const reference = ordersDatabase.ref("orders");
+  const query = profile.role === "Staff" ? reference : reference.orderByChild("owner").equalTo(user.uid);
+  orderSubscription = query;
+  query.on("value", snapshot => {
+    realtimeStatus = "live";
+    const values = snapshot.val() || {};
+    orders = Object.entries(values).map(([id, order]) => ({ ...order, id }));
+    write(STORAGE.orders, orders);
+    if (profile) render();
+  }, error => {
+    realtimeStatus = "error";
+    console.error("Live order synchronization failed.", error);
+    if (profile?.role === "Staff") renderStaff();
+    toast("Live order sync failed. Check Firebase database rules and your connection.");
   });
 }
 
@@ -142,6 +220,7 @@ function renderCustomer() {
       <header class="topbar">
         <div class="brand"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div>
         <div class="top-actions">
+          <button class="share-button" data-install-app aria-label="Add to Home Screen" type="button">＋ Add to Home Screen</button>
           <button class="share-button" data-share-app type="button">▦ Share app</button>
           <button class="icon-button" id="logout" title="Sign out">Sign out</button>
           <div class="user-chip"><span class="avatar">${initial}</span><span class="user-name">${name}</span></div>
@@ -163,6 +242,7 @@ function renderCustomer() {
     </div>`;
   document.getElementById("logout").addEventListener("click", logout);
   bindShareApp();
+  bindInstallApp();
   document.querySelectorAll("[data-customer-tab]").forEach(button => button.addEventListener("click", () => { customerTab = button.dataset.customerTab; render(); }));
   document.querySelectorAll("[data-category]").forEach(button => button.addEventListener("click", () => { category = button.dataset.category; render(); }));
   document.getElementById("menu-search")?.addEventListener("input", event => {
@@ -203,7 +283,7 @@ function customerMenuContent() {
 
 function foodCard(item) {
   return `<article class="food-card">
-    <div class="food-art"><span>${escapeHTML(item.emoji)}</span>${item.tag ? `<span class="tag">${escapeHTML(item.tag)}</span>` : ""}<button class="like ${likes.has(item.id) ? "liked" : ""}" data-like="${escapeHTML(item.id)}" aria-label="${likes.has(item.id) ? "Unlike" : "Like"} ${escapeHTML(item.name)}">${likes.has(item.id) ? "♥" : "♡"}</button></div>
+    <div class="food-art">${item.image ? `<img src="${escapeHTML(item.image)}" alt="${escapeHTML(item.name)}">` : `<span>${escapeHTML(item.emoji)}</span>`}${item.tag ? `<span class="tag">${escapeHTML(item.tag)}</span>` : ""}<button class="like ${likes.has(item.id) ? "liked" : ""}" data-like="${escapeHTML(item.id)}" aria-label="${likes.has(item.id) ? "Unlike" : "Like"} ${escapeHTML(item.name)}">${likes.has(item.id) ? "♥" : "♡"}</button></div>
     <div class="food-info"><h3>${escapeHTML(item.name)}</h3><p class="description">${escapeHTML(item.description)}</p><div class="food-bottom"><div><span class="price">${money(item.price)}</span><span class="food-points">✦ ${item.points} points</span></div><button class="add-btn" data-add="${escapeHTML(item.id)}" aria-label="Add ${escapeHTML(item.name)} to cart" ${item.stock < 1 ? "disabled" : ""}>${item.stock < 1 ? "−" : "+"}</button></div></div>
   </article>`;
 }
@@ -242,7 +322,7 @@ function profileContent() {
     <div class="panel"><div class="reward-card"><div><h3>Good choices add up</h3><p>You've collected ${currentPoints()} canteen points.</p></div><span class="reward-emoji">✨</span></div></div>`;
 }
 
-function checkout() {
+async function checkout() {
   const entries = Object.entries(cart).filter(([, count]) => count > 0);
   if (!entries.length) return;
   for (const [id, quantity] of entries) {
@@ -252,13 +332,15 @@ function checkout() {
       return;
     }
   }
+  const checkoutButton = document.getElementById("checkout");
+  if (checkoutButton) checkoutButton.disabled = true;
   const items = entries.map(([id, quantity]) => {
     const item = menu.find(food => food.id === id);
     item.stock -= quantity;
     return { id, name: item.name, quantity, price: item.price };
   });
   const order = {
-    id: `CS${Date.now().toString().slice(-6)}`,
+    id: realtimeEnabled ? ordersDatabase.ref("orders").push().key : `CS${Date.now().toString().slice(-6)}`,
     owner: profile.id,
     customer: profile.name,
     grade: profile.grade,
@@ -270,9 +352,21 @@ function checkout() {
     status: "Received",
     createdAt: Date.now()
   };
-  orders = [order, ...orders];
+  if (realtimeEnabled) {
+    try {
+      await ordersDatabase.ref("orders").child(order.id).set(order);
+    } catch (error) {
+      for (const [id, quantity] of entries) menu.find(food => food.id === id).stock += quantity;
+      console.error("Unable to submit order to Firebase.", error);
+      if (checkoutButton) checkoutButton.disabled = false;
+      toast("Order was not sent. Check your connection and try again.");
+      return;
+    }
+  } else {
+    orders = [order, ...orders];
+  }
   cart = {};
-  write(STORAGE.orders, orders);
+  if (!realtimeEnabled) write(STORAGE.orders, orders);
   write(STORAGE.menu, menu);
   customerTab = "Orders";
   render();
@@ -282,7 +376,7 @@ function checkout() {
 function openTracker(orderId) {
   const order = customerOrders().find(item => item.id === orderId);
   if (!order) return;
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="tracker-title"><div class="modal-head"><h2 id="tracker-title">Track your order</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle" style="margin:9px 0">Order ${escapeHTML(order.id)}</p><div class="tracker-box"><div style="font-size:30px;margin-bottom:8px">🍱</div><strong>${escapeHTML(order.status)}</strong><p class="subtle" style="font-size:12px;margin:5px 0 0">${order.status === "Ready for pickup" ? "Head to the canteen counter when you're ready." : order.status === "Completed" ? "Enjoy your meal! Points are in your rewards." : "The canteen team is working on your order."}</p></div><div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div><p class="footer-note">This tracker updates when the canteen updates your order on this device or shared browser.</p></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="tracker-title"><div class="modal-head"><h2 id="tracker-title">Track your order</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle" style="margin:9px 0">Order ${escapeHTML(order.id)}</p><div class="tracker-box"><div style="font-size:30px;margin-bottom:8px">🍱</div><strong>${escapeHTML(order.status)}</strong><p class="subtle" style="font-size:12px;margin:5px 0 0">${order.status === "Ready for pickup" ? "Head to the canteen counter when you're ready." : order.status === "Completed" ? "Enjoy your meal! Points are in your rewards." : "The canteen team is working on your order."}</p></div><div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div><p class="footer-note">${realtimeEnabled ? "Order status syncs in real time with the canteen." : "This tracker updates when the canteen updates your order on this device."}</p></section></div>`;
   bindModalClose();
 }
 
@@ -298,6 +392,43 @@ function bindShareApp() {
   document.querySelectorAll("[data-share-app]").forEach(button => button.addEventListener("click", openShareModal));
 }
 
+function bindInstallApp() {
+  const installed = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  document.querySelectorAll("[data-install-app]").forEach(button => {
+    button.hidden = installed;
+    button.textContent = "＋ Add to Home Screen";
+    button.onclick = installPrompt ? promptAppInstall : openInstallHelp;
+  });
+}
+
+async function promptAppInstall() {
+  if (!installPrompt) {
+    openInstallHelp();
+    return;
+  }
+  const prompt = installPrompt;
+  installPrompt = null;
+  try {
+    await prompt.prompt();
+    await prompt.userChoice;
+  } catch (error) {
+    console.error("Unable to start app installation.", error);
+    toast("Use your browser menu to add CampuSnack to your device.");
+  }
+}
+
+function openInstallHelp() {
+  const userAgent = navigator.userAgent;
+  const isAppleMobile = /iPhone|iPad|iPod/.test(userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const instructions = isAppleMobile
+    ? "In Safari, tap Share, choose Add to Home Screen, then tap Add."
+    : /Android/i.test(userAgent)
+      ? "In Chrome or Edge, open the browser menu and choose Install app or Add to Home screen."
+      : "Use your browser's Install app option or menu. Chrome and Edge usually show Install app in the address bar or browser menu. On iPhone or iPad, open this page in Safari, tap Share, then Add to Home Screen.";
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="install-title"><div class="modal-head"><h2 id="install-title">Add CampuSnack to Home Screen</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle">${instructions}</p><p class="share-note">CampuSnack installs as a web app from this browser; no app-store download is needed. Installation requires a secure HTTPS website (localhost is supported for testing), and the option depends on your device and browser.</p></section></div>`;
+  bindModalClose();
+}
+
 function openShareModal() {
   const shareUrl = new URL(location.href);
   shareUrl.search = "";
@@ -310,11 +441,14 @@ function openShareModal() {
     <p class="subtle share-description">${shareable ? "Scan this code to open the app, or copy its link." : "Open the app from an HTTP or HTTPS address before creating a shareable QR code."}</p>
     ${qrMatrix ? `<div class="qr-frame"><canvas class="share-qr" id="share-qr" role="img" aria-label="QR code linking to CampuSnack"></canvas></div>` : `<div class="qr-unavailable">${shareable ? "This app address is too long to encode as a QR code. You can still copy the link below." : "A QR code needs a web address to share. Start a local web server or publish the app, then open that address here."}</div>`}
     <label class="share-link-label" for="share-url">App link</label><input id="share-url" class="share-url" type="url" readonly value="${escapeHTML(shareUrl.href)}">
-    ${shareable ? `<button class="secondary copy-share-link" id="copy-share-link" type="button">Copy link</button>` : ""}
+    ${qrMatrix ? `<button class="secondary copy-share-link" id="share-qr-code" type="button">Share QR code</button><button class="secondary copy-share-link" id="download-share-qr" type="button">Download QR image</button>` : ""}
+    ${shareable ? `<button class="secondary copy-share-link" id="copy-share-link" type="button">Copy link</button><button class="secondary share-install-button" data-install-app type="button">＋ Add to Home Screen</button>` : ""}
     ${isLocalhost ? `<p class="share-note">This address only works on this device. Publish the app to a public web address before sharing it with others.</p>` : ""}
     <p class="share-note">The code is generated on this device. URL query parameters are not included.</p>
   </section></div>`;
   if (qrMatrix) drawQrCode(document.getElementById("share-qr"), qrMatrix);
+  document.getElementById("share-qr-code")?.addEventListener("click", () => exportQrCode(shareUrl.href, true));
+  document.getElementById("download-share-qr")?.addEventListener("click", () => exportQrCode(shareUrl.href, false));
   document.getElementById("copy-share-link")?.addEventListener("click", async () => {
     try {
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
@@ -326,7 +460,39 @@ function openShareModal() {
       toast("Couldn't copy automatically. Select the app link to copy it.");
     }
   });
+  bindInstallApp();
   bindModalClose();
+}
+
+async function exportQrCode(shareUrl, share) {
+  const canvas = document.getElementById("share-qr");
+  if (!canvas) return;
+  try {
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(result => result ? resolve(result) : reject(new Error("Unable to create QR image.")), "image/png");
+    });
+    const file = typeof File === "function" ? new File([blob], "campusnack-qr.png", { type: "image/png" }) : null;
+    if (share && file && navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
+      try {
+        await navigator.share({ files: [file], title: "CampuSnack", text: shareUrl });
+        return;
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        throw error;
+      }
+    }
+
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = "campusnack-qr.png";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+    toast(share ? "QR image downloaded. Share it from your device's photos or files." : "QR image downloaded.");
+  } catch (error) {
+    console.error("Unable to export the app QR code.", error);
+    toast("Couldn't export the QR code. Please try again.");
+  }
 }
 
 function createQrMatrix(text) {
@@ -493,24 +659,37 @@ function updateCart(id, amount) {
 
 function renderStaff() {
   const name = escapeHTML(profile.name);
-  const sales = orders.filter(order => order.status === "Completed").reduce((sum, order) => sum + order.total, 0);
-  document.getElementById("app").innerHTML = `<div class="app-shell"><header class="topbar"><div class="brand"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em><span style="font:600 11px 'DM Sans';color:#78827b;letter-spacing:0;margin-left:4px">STAFF</span></div><div class="top-actions"><button class="share-button" data-share-app type="button">▦ Share app</button><button class="icon-button" id="logout">Sign out</button><div class="user-chip"><span class="avatar">${name.charAt(0)}</span><span class="user-name">${name}</span></div></div></header>
-    <main class="staff-page"><div class="staff-header"><div><div class="eyebrow">Canteen operations</div><h1>Good day, ${name.split(" ")[0]}</h1><p class="subtle" style="margin:0">Manage today's orders, stock and menu.</p></div><span class="live-pill">● LOCAL LIVE UPDATES</span></div>
-    <div class="stats-grid" style="margin-bottom:20px"><div class="stat-card"><span>Today's orders</span><strong>${orders.filter(order => new Date(order.createdAt).toDateString() === new Date().toDateString()).length}</strong></div><div class="stat-card"><span>Completed sales</span><strong>${money(sales)}</strong></div><div class="stat-card"><span>Menu items</span><strong>${menu.length}</strong></div><div class="stat-card"><span>Low stock items</span><strong>${menu.filter(item => item.stock <= 5).length}</strong></div></div>
+  const dailyOrders = todayOrders();
+  const sales = dailyOrders.filter(order => order.status === "Completed").reduce((sum, order) => sum + order.total, 0);
+  document.getElementById("app").innerHTML = `<div class="app-shell">  <header class="topbar"><div class="brand"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em><span style="font:600 11px 'DM Sans';color:#78827b;letter-spacing:0;margin-left:4px">STAFF</span></div><div class="top-actions"><button class="share-button" data-install-app aria-label="Add to Home Screen" type="button">＋ Add to Home Screen</button><button class="share-button" data-share-app type="button">▦ Share app</button><button class="icon-button" id="logout">Sign out</button><div class="user-chip"><span class="avatar">${name.charAt(0)}</span><span class="user-name">${name}</span></div></div></header>
+    <main class="staff-page"><div class="staff-header"><div><div class="eyebrow">Canteen operations</div><h1>Good day, ${name.split(" ")[0]}</h1><p class="subtle" style="margin:0">Manage today's orders, stock and menu.</p></div><span class="live-pill ${realtimeStatus === "error" ? "sync-error" : ""}">${realtimeEnabled ? `● ${realtimeStatus === "live" ? "LIVE SYNC" : realtimeStatus === "error" ? "SYNC ERROR" : "CONNECTING"}` : "● THIS DEVICE ONLY"}</span></div>
+    <div class="stats-grid" style="margin-bottom:20px"><div class="stat-card"><span>Today's orders</span><strong>${dailyOrders.length}</strong></div><div class="stat-card"><span>Today's completed sales</span><strong>${money(sales)}</strong></div><div class="stat-card"><span>Menu items</span><strong>${menu.length}</strong></div><div class="stat-card"><span>Low stock items</span><strong>${menu.filter(item => item.stock <= 5).length}</strong></div></div>
     <nav class="staff-nav">${["Orders", "Stock", "Menu"].map(tab => `<button class="nav-tab ${staffTab === tab ? "active" : ""}" data-staff-tab="${tab}">${tab}</button>`).join("")}</nav>
     <section class="staff-content">${staffTab === "Orders" ? staffOrdersContent() : staffTab === "Stock" ? staffStockContent() : staffMenuContent()}</section>
-    <p class="footer-note">Staff mode is a local demo. Orders and edits are stored in this browser and are not shared across devices. A production system requires server-side staff authentication and a shared database.</p></main>
+    <p class="footer-note">${realtimeEnabled ? "Live order queue connected to Firebase. Only staff UIDs allowlisted in Realtime Database rules can view or update the shared queue." : "Staff mode is a local demo. Orders and edits are stored in this browser and are not shared across devices."}</p></main>
     <div id="modal-root"></div></div>`;
   document.getElementById("logout").addEventListener("click", logout);
   bindShareApp();
+  bindInstallApp();
   document.querySelectorAll("[data-staff-tab]").forEach(button => button.addEventListener("click", () => { staffTab = button.dataset.staffTab; renderStaff(); }));
   document.querySelectorAll("[data-status]").forEach(select => select.addEventListener("change", () => {
     const order = orders.find(item => item.id === select.dataset.status);
     if (!order) return;
-    order.status = select.value;
-    write(STORAGE.orders, orders);
-    renderStaff();
-    toast(`Order ${order.id} updated.`);
+    const nextStatus = select.value;
+    if (realtimeEnabled) {
+      ordersDatabase.ref("orders").child(order.id).update({ status: nextStatus }).then(() => {
+        toast(`Order ${order.id} updated.`);
+      }).catch(error => {
+        console.error("Unable to update order status in Firebase.", error);
+        toast("Could not update the order. Check staff access and your connection.");
+        renderStaff();
+      });
+    } else {
+      order.status = nextStatus;
+      write(STORAGE.orders, orders);
+      renderStaff();
+      toast(`Order ${order.id} updated.`);
+    }
   }));
   document.querySelectorAll("[data-stock]").forEach(input => input.addEventListener("change", () => {
     const item = menu.find(food => food.id === input.dataset.stock);
@@ -520,14 +699,14 @@ function renderStaff() {
     renderStaff();
     toast(`${item.name} stock updated.`);
   }));
-  document.getElementById("add-menu-item")?.addEventListener("click", openMenuEditor);
+  document.getElementById("add-menu-item")?.addEventListener("click", () => openMenuEditor());
   document.querySelectorAll("[data-edit-menu]").forEach(button => button.addEventListener("click", () => openMenuEditor(button.dataset.editMenu)));
   bindModalClose();
 }
 
 function staffOrdersContent() {
-  const sorted = [...orders].sort((a, b) => b.createdAt - a.createdAt);
-  if (!sorted.length) return `<div class="empty-state"><div class="empty-icon">📋</div>No orders yet. New customer orders will appear here.</div>`;
+  const sorted = todayOrders().sort((a, b) => b.createdAt - a.createdAt);
+  if (!sorted.length) return `<div class="empty-state"><div class="empty-icon">📋</div>No orders today. New customer orders will appear here.</div>`;
   return `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Placed</th><th>Status</th></tr></thead><tbody>${sorted.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}<div class="subtle" style="font-size:10px">${escapeHTML(order.grade)} · ${escapeHTML(order.section)}</div></td><td>${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</td><td>${money(order.total)}</td><td>${escapeHTML(order.payment)}</td><td>${new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td><select class="status-select" data-status="${escapeHTML(order.id)}">${statuses.map(status => `<option ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table></div>`;
 }
 
@@ -536,13 +715,38 @@ function staffStockContent() {
 }
 
 function staffMenuContent() {
-  return `<div class="section-heading" style="margin-top:0"><div><h2>Live menu editor</h2><p class="subtle" style="margin:5px 0 0">Changes save immediately on this device.</p></div><button id="add-menu-item" class="primary" style="width:auto">＋ Add item</button></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name"><span class="small-emoji">${escapeHTML(item.emoji)}</span><div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="subtle" style="font-size:11px;margin-top:3px">${escapeHTML(item.category)} · ${money(item.price)} · ${item.stock} in stock</div></div></div><button class="secondary" data-edit-menu="${escapeHTML(item.id)}">Edit</button></div>`).join("")}`;
+  return `<div class="section-heading" style="margin-top:0"><div><h2>Live menu editor</h2><p class="subtle" style="margin:5px 0 0">Changes save immediately on this device.</p></div><button id="add-menu-item" class="primary" style="width:auto">＋ Add item</button></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji">${escapeHTML(item.emoji)}</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="subtle" style="font-size:11px;margin-top:3px">${escapeHTML(item.category)} · ${money(item.price)} · ${item.stock} in stock</div></div></div><button class="secondary" data-edit-menu="${escapeHTML(item.id)}">Edit</button></div>`).join("")}`;
 }
 
 function openMenuEditor(id = "") {
-  const item = menu.find(food => food.id === id) || { name: "", category: "Meals", description: "", price: "", points: 1, stock: 0, emoji: "🍽️", tag: "" };
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field-grid"><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div><div class="field"><label for="item-emoji">Emoji</label><input id="item-emoji" name="emoji" value="${escapeHTML(item.emoji)}" required></div></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" value="${item.stock}" required></div></div><div class="field"><label for="item-points">Points per item</label><input id="item-points" name="points" type="number" min="0" value="${item.points}" required></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
+  const item = menu.find(food => food.id === id) || { name: "", category: "Meals", description: "", price: "", points: 1, stock: 0, emoji: "🍽️", tag: "", image: "" };
+  let image = item.image || "";
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field-grid"><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div><div class="field"><label for="item-emoji">Emoji fallback</label><input id="item-emoji" name="emoji" value="${escapeHTML(item.emoji)}" required></div></div><div class="field"><label for="item-image">Product photo</label><input id="item-image" name="image" type="file" accept="image/*"><img id="item-image-preview" class="menu-image-preview" src="${escapeHTML(image)}" alt="Product photo preview" ${image ? "" : "hidden"}><button class="secondary" id="remove-item-image" type="button" ${image ? "" : "hidden"}>Remove photo</button><span class="field-help">Choose a product photo. Images are resized to fit this device's local storage.</span></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" value="${item.stock}" required></div></div><div class="field"><label for="item-points">Points per item</label><input id="item-points" name="points" type="number" min="0" value="${item.points}" required></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
   bindModalClose();
+  const imageInput = document.getElementById("item-image");
+  const imagePreview = document.getElementById("item-image-preview");
+  const removeImage = document.getElementById("remove-item-image");
+  imageInput.addEventListener("change", async () => {
+    const file = imageInput.files[0];
+    if (!file) return;
+    try {
+      image = await resizeMenuImage(file);
+      imagePreview.src = image;
+      imagePreview.hidden = false;
+      removeImage.hidden = false;
+    } catch (error) {
+      console.error("Unable to process the menu photo.", error);
+      imageInput.value = "";
+      toast("Could not load that photo. Please choose another image.");
+    }
+  });
+  removeImage.addEventListener("click", () => {
+    image = "";
+    imageInput.value = "";
+    imagePreview.removeAttribute("src");
+    imagePreview.hidden = true;
+    removeImage.hidden = true;
+  });
   document.getElementById("menu-editor-form").addEventListener("submit", event => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -555,7 +759,8 @@ function openMenuEditor(id = "") {
       price: Number(data.get("price")),
       stock: Math.max(0, Number(data.get("stock"))),
       points: Math.max(0, Number(data.get("points"))),
-      tag: item.tag || ""
+      tag: item.tag || "",
+      image
     };
     menu = id ? menu.map(food => food.id === id ? updated : food) : [...menu, updated];
     write(STORAGE.menu, menu);
@@ -564,7 +769,41 @@ function openMenuEditor(id = "") {
   });
 }
 
+function resizeMenuImage(file) {
+  if (!file.type.startsWith("image/")) return Promise.reject(new Error("Selected file is not an image."));
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error("Unable to read image file."));
+    reader.onload = () => {
+      const source = new Image();
+      source.onerror = () => reject(new Error("Unable to decode image file."));
+      source.onload = () => {
+        const scale = Math.min(1, 900 / Math.max(source.naturalWidth, source.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(source.naturalHeight * scale));
+        const context = canvas.getContext("2d");
+        if (!context) {
+          reject(new Error("Canvas is unavailable."));
+          return;
+        }
+        context.drawImage(source, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.78));
+      };
+      source.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function logout() {
+  if (orderSubscription) {
+    orderSubscription.off("value");
+    orderSubscription = null;
+  }
+  if (realtimeEnabled && profile?.role === "Staff") {
+    firebaseAuth.signOut().catch(error => console.error("Unable to sign out of Firebase.", error));
+  }
   profile = null;
   cart = {};
   customerTab = "Menu";
@@ -578,16 +817,77 @@ function logout() {
 }
 
 window.addEventListener("storage", event => {
-  if (event.key === STORAGE.orders) orders = read(STORAGE.orders, []);
+  if (event.key === STORAGE.orders && !realtimeEnabled) orders = read(STORAGE.orders, []);
   if (event.key === STORAGE.menu) menu = read(STORAGE.menu, initialMenu);
   if (profile) render();
 });
 window.addEventListener("focus", () => {
-  orders = read(STORAGE.orders, []);
+  if (!realtimeEnabled) orders = read(STORAGE.orders, []);
   menu = read(STORAGE.menu, initialMenu);
   if (profile) render();
 });
+let displayedDay = dateKey(Date.now());
+setInterval(() => {
+  const currentDay = dateKey(Date.now());
+  if (currentDay !== displayedDay) {
+    displayedDay = currentDay;
+    if (profile?.role === "Staff") renderStaff();
+  }
+}, 60_000);
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
   window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js").catch(error => console.error("Service worker registration failed.", error)));
 }
-render();
+window.addEventListener("beforeinstallprompt", event => {
+  event.preventDefault();
+  installPrompt = event;
+  bindInstallApp();
+});
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+  bindInstallApp();
+});
+async function startApp() {
+  try {
+    await window.CAMPUSNACK_FIREBASE_READY;
+    setupRealtime();
+  } catch (error) {
+    realtimeSetupError = error;
+    console.error("Unable to initialize Firebase order sync.", error);
+  }
+  if (realtimeSetupError) {
+    render();
+    toast(realtimeSetupError.message);
+    return;
+  }
+  if (realtimeEnabled && profile) {
+    try {
+      const user = await new Promise((resolve, reject) => {
+        let unsubscribe = () => {};
+        unsubscribe = firebaseAuth.onAuthStateChanged(
+          currentUser => { unsubscribe(); resolve(currentUser); },
+          error => { unsubscribe(); reject(error); }
+        );
+      });
+      if (profile.role === "Staff" && (!user || user.uid !== profile.id)) {
+        profile = null;
+        localStorage.removeItem(STORAGE.profile);
+        renderLogin("Staff");
+        return;
+      }
+      if (profile.role !== "Staff") {
+        const customer = user || (await firebaseAuth.signInAnonymously()).user;
+        profile.id = customer.uid;
+        write(STORAGE.profile, profile);
+      }
+      connectOrderSync();
+    } catch (error) {
+      console.error("Unable to restore Firebase session.", error);
+      profile = null;
+      renderLogin();
+      toast("Firebase session unavailable. Please sign in again.");
+      return;
+    }
+  }
+  render();
+}
+startApp();
