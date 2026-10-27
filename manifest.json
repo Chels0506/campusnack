@@ -1,0 +1,12 @@
+{
+  "name": "CampuSnack",
+  "short_name": "CampuSnack",
+  "description": "Order from your school canteen.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f5f5ee",
+  "theme_color": "#f5f5ee",
+  "icons": [
+    { "src": "campusnack-logo.jpg", "sizes": "2000x2000", "type": "image/jpeg", "purpose": "any maskable" }
+  ]
+}
