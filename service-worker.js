@@ -1,4 +1,4 @@
-const CACHE_NAME = "campusnack-shell-v8";
+const CACHE_NAME = "campusnack-shell-v9";
 const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./firebase-config.js", "./manifest.json", "./campusnack-logo.jpg", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-maskable-512.png", "./icons/apple-touch-icon.png"];
 
 self.addEventListener("install", event => {

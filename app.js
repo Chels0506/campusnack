@@ -41,6 +41,8 @@ let orders = read(STORAGE.orders, []);
 let profile = read(STORAGE.profile, null);
 let likes = new Set(read(STORAGE.likes, []));
 let gcashQr = read(STORAGE.gcashQr, null);
+let gcashQrDraft = null;
+let gcashQrUploadMessage = "";
 let cart = {};
 let paymentReference = "";
 let category = "All";
@@ -908,6 +910,43 @@ function renderStaff() {
       renderStaff();
     }
   }));
+  document.getElementById("gcash-qr-file")?.addEventListener("change", async event => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    const saveButton = document.querySelector("#gcash-qr-form button[type='submit']");
+    const message = document.getElementById("gcash-upload-message");
+    const preview = document.getElementById("gcash-upload-preview");
+    gcashQrDraft = null;
+    if (saveButton) saveButton.disabled = true;
+    if (preview) preview.innerHTML = "";
+    if (!file) {
+      gcashQrUploadMessage = "No file selected. Choose the QR image, then wait for its preview.";
+      if (message) message.textContent = gcashQrUploadMessage;
+      return;
+    }
+    gcashQrUploadMessage = `Preparing ${file.name}...`;
+    if (message) {
+      message.textContent = gcashQrUploadMessage;
+      message.className = "field-help";
+    }
+    try {
+      const imageData = await resizeGcashQr(file);
+      if (input.files?.[0] !== file) return;
+      gcashQrDraft = { imageData, name: file.name };
+      gcashQrUploadMessage = `Ready to upload: ${file.name} (${Math.ceil(imageData.length / 1024)} KB). Check the preview, then press Save and share receiver QR.`;
+      if (preview) preview.innerHTML = `<img class="gcash-qr-preview" src="${escapeHTML(imageData)}" alt="Selected GCash QR preview">`;
+      if (message) message.textContent = gcashQrUploadMessage;
+      if (saveButton) saveButton.disabled = false;
+    } catch (error) {
+      console.error("Unable to prepare the selected GCash QR image.", error);
+      gcashQrUploadMessage = `Could not prepare the image: ${error.message}`;
+      if (message) {
+        message.textContent = gcashQrUploadMessage;
+        message.className = "payment-upload-error";
+      }
+      toast(error.message);
+    }
+  });
   document.getElementById("gcash-qr-form")?.addEventListener("submit", saveGcashQr);
   document.getElementById("remove-gcash-qr")?.addEventListener("click", removeGcashQr);
   document.querySelectorAll("[data-stock]").forEach(input => input.addEventListener("change", () => {
@@ -953,7 +992,7 @@ function staffPaymentsContent() {
   return `<div class="section-heading" style="margin-top:0"><div><h2>GCash receiver QR</h2><p class="subtle" style="margin:5px 0 0">${realtimeEnabled ? "This QR is shared live with signed-in students and teachers." : "Local demo only; this setting is not shared across devices."}</p></div></div>
     <div class="gcash-settings panel">
       ${gcashQr?.imageData ? `<img class="gcash-qr-preview" src="${escapeHTML(gcashQr.imageData)}" alt="Current GCash receiver QR"><p class="subtle">Current receiver QR${gcashQr.updatedAt ? ` · updated ${new Date(gcashQr.updatedAt).toLocaleString()}` : ""}.</p>` : `<p class="subtle">No GCash receiver QR is configured. Students and teachers cannot select GCash QR pay until you add one.</p>`}
-      <form id="gcash-qr-form"><label for="gcash-qr-file">Upload the canteen's official GCash QR image</label><input id="gcash-qr-file" type="file" accept="image/png,image/jpeg,image/webp" required><p class="field-help">Upload only the payment QR image. After saving, check the recipient name and test it with a small payment before accepting orders.</p><button class="primary" type="submit">Save and share receiver QR</button></form>
+      <form id="gcash-qr-form"><label for="gcash-qr-file">Upload the canteen's official GCash QR image</label><input id="gcash-qr-file" type="file" accept="image/*"><div id="gcash-upload-preview">${gcashQrDraft ? `<img class="gcash-qr-preview" src="${escapeHTML(gcashQrDraft.imageData)}" alt="Selected GCash QR preview">` : ""}</div><p id="gcash-upload-message" class="${gcashQrUploadMessage.startsWith("Could not") ? "payment-upload-error" : "field-help"}" role="status">${escapeHTML(gcashQrUploadMessage || "Choose the image, check its preview, then click Save and share receiver QR.")}</p><p class="field-help">Use a clear PNG or JPG image showing the full QR code. After saving, check the recipient name and test it with a small payment before accepting orders.</p><button class="primary" type="submit" ${gcashQrDraft ? "" : "disabled"}>Save and share receiver QR</button></form>
       ${gcashQr?.imageData ? `<button id="remove-gcash-qr" class="secondary" type="button" style="margin-top:10px">Remove receiver QR</button>` : ""}
     </div>
     <div class="section-heading"><div><h2>Payments needing review</h2><p class="subtle" style="margin:5px 0 0">Check each transfer in the receiver's GCash account before confirming.</p></div></div>
@@ -965,30 +1004,39 @@ function staffPaymentsContent() {
 
 async function saveGcashQr(event) {
   event.preventDefault();
-  const input = document.getElementById("gcash-qr-file");
   const submitButton = event.currentTarget.querySelector("button[type='submit']");
-  const file = input.files?.[0];
-  if (!file) {
-    toast("Choose the official GCash QR image first.");
+  if (!gcashQrDraft) {
+    gcashQrUploadMessage = "Choose an image and wait for its preview before saving.";
+    const message = document.getElementById("gcash-upload-message");
+    if (message) message.textContent = gcashQrUploadMessage;
     return;
   }
   if (submitButton) submitButton.disabled = true;
   try {
-    const imageData = await resizeGcashQr(file);
-    if (imageData.length > 300_000) throw new Error("The QR image is too large. Choose a smaller or cropped image.");
-    const settings = { imageData, updatedAt: Date.now() };
+    gcashQrUploadMessage = "Saving your QR image...";
+    const message = document.getElementById("gcash-upload-message");
+    if (message) message.textContent = gcashQrUploadMessage;
+    const settings = { imageData: gcashQrDraft.imageData, updatedAt: Date.now() };
     if (realtimeEnabled) {
       await ordersDatabase.ref("paymentSettings/gcashQr").set(settings);
     } else {
       gcashQr = settings;
       write(STORAGE.gcashQr, gcashQr);
     }
+    gcashQrDraft = null;
+    gcashQrUploadMessage = "";
     renderStaff();
     toast(realtimeEnabled ? "GCash QR shared with all signed-in customers." : "GCash QR saved on this device only.");
   } catch (error) {
     console.error("Unable to save the GCash receiver QR.", error);
     if (submitButton) submitButton.disabled = false;
-    toast(error.message || "Could not save the GCash QR. Check staff access and try again.");
+    gcashQrUploadMessage = `Could not save the QR: ${error.message || "Firebase rejected the request."}`;
+    const message = document.getElementById("gcash-upload-message");
+    if (message) {
+      message.textContent = gcashQrUploadMessage;
+      message.className = "payment-upload-error";
+    }
+    toast("QR upload failed. Read the message below the upload button for details.");
   }
 }
 
@@ -1001,6 +1049,8 @@ async function removeGcashQr() {
       write(STORAGE.gcashQr, null);
     }
     gcashQr = null;
+    gcashQrDraft = null;
+    gcashQrUploadMessage = "";
     renderStaff();
     toast("GCash QR removed. QR payment is unavailable until another code is added.");
   } catch (error) {
@@ -1010,27 +1060,34 @@ async function removeGcashQr() {
 }
 
 function resizeGcashQr(file) {
-  if (!file.type.startsWith("image/")) return Promise.reject(new Error("Choose a valid QR image file."));
+  if (!file.type.startsWith("image/")) return Promise.reject(new Error("Choose an image file."));
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(reader.error || new Error("Unable to read the QR image."));
     reader.onload = () => {
       const source = new Image();
-      source.onerror = () => reject(new Error("Unable to decode the QR image."));
+      source.onerror = () => reject(new Error("This photo format cannot be opened here. Save or screenshot the QR as PNG or JPG, then try again."));
       source.onload = () => {
-        const scale = Math.min(1, 900 / Math.max(source.naturalWidth, source.naturalHeight));
+        const maxImageLength = 280_000;
+        const dimensions = [900, 760, 640, 520, 420];
         const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(source.naturalHeight * scale));
         const context = canvas.getContext("2d");
-        if (!context) {
-          reject(new Error("Canvas is unavailable."));
-          return;
+        if (!context) return reject(new Error("Image processing is unavailable in this browser."));
+        for (const maxDimension of dimensions) {
+          const scale = Math.min(1, maxDimension / Math.max(source.naturalWidth, source.naturalHeight));
+          canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(source.naturalHeight * scale));
+          context.fillStyle = "#fff";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(source, 0, 0, canvas.width, canvas.height);
+          const png = canvas.toDataURL("image/png");
+          if (png.length <= maxImageLength) return resolve(png);
+          for (const quality of [0.92, 0.86, 0.8]) {
+            const jpeg = canvas.toDataURL("image/jpeg", quality);
+            if (jpeg.length <= maxImageLength) return resolve(jpeg);
+          }
         }
-        context.fillStyle = "#fff";
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        context.drawImage(source, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/png"));
+        reject(new Error("The QR image is still too large. Crop the image so it shows only the QR code, then try again."));
       };
       source.src = String(reader.result);
     };

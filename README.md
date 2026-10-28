@@ -23,7 +23,7 @@ After changing `database.rules.json`, publish the updated rules in Realtime Data
 
 ## GCash QR payments
 
-1. Sign in as an allowlisted staff member, open **Payments**, and upload the canteen's official GCash QR image. Replacing or removing it updates the QR shown to signed-in customers in real time.
+1. Sign in as an allowlisted staff member, open **Payments**, choose the canteen's official GCash QR image, wait for the preview and ready message, then click **Save and share receiver QR**. The app compresses the image for Firebase. Replacing or removing it updates the QR shown to signed-in customers in real time.
 2. Customers choose **GCash QR**, scan the displayed code from another device or use GCash's QR gallery option, verify the recipient name in GCash, send the exact order amount, then enter the GCash transaction reference before submitting the order.
 3. Staff open **Payments**, compare the submitted amount and reference against the receiver account's GCash transaction history, and click **Confirm received** only after the funds actually appear.
 
