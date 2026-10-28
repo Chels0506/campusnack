@@ -1,0 +1,24 @@
+{
+  "rules": {
+    "staffUids": {
+      ".read": false,
+      ".write": false
+    },
+    "menu": {
+      ".read": "auth != null",
+      "$itemId": {
+        ".write": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || (data.exists() && newData.exists() && data.child('stock').isNumber() && newData.child('stock').isNumber() && newData.child('stock').val() >= 0 && newData.child('stock').val() < data.child('stock').val() && newData.child('id').val() === data.child('id').val() && newData.child('name').val() === data.child('name').val() && newData.child('category').val() === data.child('category').val() && newData.child('description').val() === data.child('description').val() && newData.child('price').val() === data.child('price').val() && newData.child('points').val() === data.child('points').val() && newData.child('emoji').val() === data.child('emoji').val() && newData.child('tag').val() === data.child('tag').val() && newData.child('image').val() === data.child('image').val() && newData.child('sortOrder').val() === data.child('sortOrder').val()))",
+        ".validate": "newData.hasChildren(['id', 'name', 'category', 'description', 'price', 'points', 'stock', 'emoji', 'tag', 'sortOrder']) && newData.child('id').val() === $itemId && newData.child('price').isNumber() && newData.child('points').isNumber() && newData.child('stock').isNumber() && newData.child('stock').val() >= 0"
+      }
+    },
+    "orders": {
+      ".indexOn": ["owner"],
+      ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || (query.orderByChild === 'owner' && query.equalTo === auth.uid))",
+      "$orderId": {
+        ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || data.child('owner').val() === auth.uid)",
+        ".write": "auth != null && ((!data.exists() && newData.child('owner').val() === auth.uid && newData.child('status').val() === 'Received') || (root.child('staffUids').child(auth.uid).val() === true && newData.exists()))",
+        ".validate": "newData.hasChildren(['id', 'owner', 'customer', 'items', 'total', 'points', 'payment', 'status', 'createdAt']) && newData.child('id').val() === $orderId && (newData.child('status').val() === 'Received' || newData.child('status').val() === 'Preparing' || newData.child('status').val() === 'Ready for pickup' || newData.child('status').val() === 'Completed')"
+      }
+    }
+  }
+}

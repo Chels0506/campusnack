@@ -50,9 +50,11 @@ let installPrompt = null;
 let firebaseAuth = null;
 let ordersDatabase = null;
 let orderSubscription = null;
+let menuSubscription = null;
 let realtimeEnabled = false;
 let realtimeSetupError = null;
 let realtimeStatus = "connecting";
+let salesPeriod = "week";
 
 function setupRealtime() {
   const configValues = ["apiKey", "authDomain", "databaseURL", "projectId", "appId"];
@@ -74,13 +76,24 @@ const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 }[char]));
 const money = amount => `₱${Number(amount).toFixed(2)}`;
+const pointsToPeso = points => Number(points) / 10;
 const dateKey = value => {
   const date = new Date(value);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 };
 const todayOrders = () => orders.filter(order => dateKey(order.createdAt) === dateKey(Date.now()));
 const customerOrders = () => orders.filter(order => order.owner === profile?.id).sort((a, b) => b.createdAt - a.createdAt);
-const currentPoints = () => (profile?.points || 0) + customerOrders().filter(order => order.status === "Completed").reduce((sum, order) => sum + order.points, 0);
+const currentPoints = () => Math.max(0,
+  Number(profile?.points || 0) +
+  customerOrders().filter(order => order.status === "Completed").reduce((sum, order) => sum + Number(order.points || 0), 0) -
+  customerOrders().reduce((sum, order) => sum + Number(order.pointsUsed || 0), 0)
+);
+const walletBalanceInfo = total => {
+  const availablePoints = currentPoints();
+  const pointsUsed = Math.min(availablePoints, Math.floor((total + Number.EPSILON) * 10));
+  const discount = pointsToPeso(pointsUsed);
+  return { availablePoints, discount, pointsUsed, canUseWallet: pointsUsed > 0 };
+};
 
 function toast(message) {
   document.querySelector(".toast")?.remove();
@@ -193,6 +206,7 @@ function renderLogin(selectedRole = "Student") {
 function connectOrderSync() {
   if (!realtimeEnabled || !firebaseAuth.currentUser || !profile) return;
   if (orderSubscription) orderSubscription.off("value");
+  if (menuSubscription) menuSubscription.off("value");
   const user = firebaseAuth.currentUser;
   const reference = ordersDatabase.ref("orders");
   const query = profile.role === "Staff" ? reference : reference.orderByChild("owner").equalTo(user.uid);
@@ -208,6 +222,32 @@ function connectOrderSync() {
     console.error("Live order synchronization failed.", error);
     if (profile?.role === "Staff") renderStaff();
     toast("Live order sync failed. Check Firebase database rules and your connection.");
+  });
+
+  menuSubscription = ordersDatabase.ref("menu");
+  menuSubscription.on("value", snapshot => {
+    const values = snapshot.val();
+    if (values) {
+      menu = (Array.isArray(values) ? values : Object.values(values))
+        .filter(Boolean)
+        .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+      write(STORAGE.menu, menu);
+      if (profile) render();
+      return;
+    }
+    if (profile.role === "Staff") {
+      Promise.all(menu.map((item, index) => ordersDatabase.ref("menu").child(item.id).transaction(
+        current => current || { ...item, sortOrder: Number(item.sortOrder ?? index) },
+        undefined,
+        false
+      ))).catch(error => {
+        console.error("Unable to initialize the shared menu.", error);
+        toast("Could not publish the menu to Firebase. Check staff access and try again.");
+      });
+    }
+  }, error => {
+    console.error("Live menu synchronization failed.", error);
+    toast("Live menu sync failed. Check Firebase database rules and your connection.");
   });
 }
 
@@ -292,17 +332,21 @@ function cartContent() {
   const entries = Object.entries(cart).filter(([, quantity]) => quantity > 0);
   const total = entries.reduce((sum, [id, quantity]) => sum + (menu.find(item => item.id === id)?.price || 0) * quantity, 0);
   const earned = entries.reduce((sum, [id, quantity]) => sum + (menu.find(item => item.id === id)?.points || 0) * quantity, 0);
+  const wallet = walletBalanceInfo(total);
+  if (payment === "Wallet" && !wallet.canUseWallet) payment = "Cash";
   return `<div class="panel"><h2>Your order <span style="color:#92988f;font-size:12px;font-weight:500">${entries.reduce((sum, [, count]) => sum + count, 0)} items</span></h2>
     ${entries.length ? entries.map(([id, quantity]) => {
       const item = menu.find(food => food.id === id);
       if (!item) return "";
       return `<div class="cart-row"><div><strong>${escapeHTML(item.name)}</strong>${money(item.price)} each</div><div class="qty-control"><button data-qty="-1" data-id="${escapeHTML(id)}" aria-label="Remove one">−</button>${quantity}<button data-qty="1" data-id="${escapeHTML(id)}" aria-label="Add one">+</button></div></div>`;
     }).join("") : `<div class="cart-empty"><span>🛍️</span>Your cart is waiting for something tasty.</div>`}
-    <div class="cart-total"><span>Total</span><span>${money(total)}</span></div><div class="cart-reward">✦ You'll earn ${earned} points with this order</div>
-    <div class="payment-label">Choose how to pay</div><div class="payment-options">${["Wallet", "QR", "Cash"].map(method => `<button class="payment-option ${payment === method ? "active" : ""}" data-payment="${method}">${method === "Wallet" ? "◉ Wallet" : method === "QR" ? "▦ QR pay" : "▤ Cash"}</button>`).join("")}</div>
-    ${payment === "Wallet" ? `<div class="payment-label" style="margin-top:8px">Demo wallet · no actual money is charged</div>` : ""}
+    <div class="cart-total"><span>Total</span><span>${money(total)}</span></div>
+    ${payment === "Wallet" && wallet.canUseWallet ? `<div class="cart-total"><span>Points discount · ${wallet.pointsUsed} pts</span><span>−${money(wallet.discount)}</span></div><div class="cart-total"><strong>After points discount</strong><strong>${money(Math.max(0, total - wallet.discount))}</strong></div>` : ""}
+    <div class="cart-reward">✦ You'll earn ${earned} points with this order</div>
+    <div class="payment-label">Choose how to pay</div><div class="payment-options">${["Wallet", "QR", "Cash"].map(method => `<button class="payment-option ${payment === method ? "active" : ""}" data-payment="${method}" ${method === "Wallet" && !wallet.canUseWallet ? "disabled title=\"Earn points from completed orders before using Wallet\"" : ""}>${method === "Wallet" ? "◉ Wallet" : method === "QR" ? "▦ QR pay" : "▤ Cash"}</button>`).join("")}</div>
+    ${payment === "Wallet" ? `<div class="payment-label" style="margin-top:8px">Wallet points: ${wallet.availablePoints} pts · ${money(pointsToPeso(wallet.availablePoints))} available. Applying ${wallet.pointsUsed} pts (${money(wallet.discount)} discount). 50 points = ₱5.00. Demo only; no actual money is charged.</div>` : ""}
     ${payment === "QR" ? `<div class="payment-label" style="margin-top:8px">Show your QR payment at the counter</div>` : ""}
-    <button class="primary" id="checkout" style="margin-top:15px" ${entries.length ? "" : "disabled"}>Place order · ${money(total)}</button>
+    <button class="primary" id="checkout" style="margin-top:15px" ${entries.length ? "" : "disabled"}>Place order · ${money(payment === "Wallet" ? Math.max(0, total - wallet.discount) : total)}</button>
   </div>`;
 }
 
@@ -310,7 +354,7 @@ function customerOrdersContent() {
   const list = customerOrders();
   return `<nav class="bottom-nav">${["Menu", "Orders", "Profile"].map(tab => `<button class="nav-tab ${customerTab === tab ? "active" : ""}" data-customer-tab="${tab}">${tab}</button>`).join("")}</nav>
     <div class="section-heading"><div><div class="eyebrow">Your canteen activity</div><h2>Order history</h2></div></div>
-    ${list.length ? `<div class="order-list">${list.map(order => `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(order.id)}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status">${escapeHTML(order.status)}</span></div><div style="font-size:12px;color:#657168">${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(order.total)} · ✦ ${order.points} pts</strong><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button></div><div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div></article>`).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
+    ${list.length ? `<div class="order-list">${list.map(order => `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(order.id)}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status">${escapeHTML(order.status)}</span></div><div style="font-size:12px;color:#657168">${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${order.points} pts</strong><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button></div><div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div></article>`).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
 }
 
 function profileContent() {
@@ -322,55 +366,101 @@ function profileContent() {
     <div class="panel"><div class="reward-card"><div><h3>Good choices add up</h3><p>You've collected ${currentPoints()} canteen points.</p></div><span class="reward-emoji">✨</span></div></div>`;
 }
 
+async function changeSharedStock(id, amount) {
+  const result = await ordersDatabase.ref("menu").child(id).child("stock").transaction(stock => {
+    if (typeof stock !== "number" || stock + amount < 0) return;
+    return stock + amount;
+  }, undefined, false);
+  if (!result.committed) throw new Error("The requested stock quantity is no longer available.");
+  return result.snapshot.val();
+}
+
 async function checkout() {
   const entries = Object.entries(cart).filter(([, count]) => count > 0);
   if (!entries.length) return;
-  for (const [id, quantity] of entries) {
-    const item = menu.find(food => food.id === id);
-    if (!item || item.stock < quantity) {
-      toast(`${item?.name || "An item"} is no longer available in that quantity.`);
-      return;
-    }
-  }
   const checkoutButton = document.getElementById("checkout");
   if (checkoutButton) checkoutButton.disabled = true;
-  const items = entries.map(([id, quantity]) => {
-    const item = menu.find(food => food.id === id);
-    item.stock -= quantity;
-    return { id, name: item.name, quantity, price: item.price };
-  });
-  const order = {
-    id: realtimeEnabled ? ordersDatabase.ref("orders").push().key : `CS${Date.now().toString().slice(-6)}`,
-    owner: profile.id,
-    customer: profile.name,
-    grade: profile.grade,
-    section: profile.section,
-    items,
-    total: items.reduce((sum, item) => sum + item.price * item.quantity, 0),
-    points: entries.reduce((sum, [id, quantity]) => sum + menu.find(food => food.id === id).points * quantity, 0),
-    payment,
-    status: "Received",
-    createdAt: Date.now()
-  };
-  if (realtimeEnabled) {
-    try {
-      await ordersDatabase.ref("orders").child(order.id).set(order);
-    } catch (error) {
-      for (const [id, quantity] of entries) menu.find(food => food.id === id).stock += quantity;
-      console.error("Unable to submit order to Firebase.", error);
-      if (checkoutButton) checkoutButton.disabled = false;
-      toast("Order was not sent. Check your connection and try again.");
-      return;
+  let reserved = [];
+  try {
+    if (realtimeEnabled) {
+      const snapshot = await ordersDatabase.ref("menu").once("value");
+      const values = snapshot.val();
+      if (!values) throw new Error("The shared menu has not been published by staff yet.");
+      menu = (Array.isArray(values) ? values : Object.values(values)).filter(Boolean);
+      write(STORAGE.menu, menu);
     }
-  } else {
-    orders = [order, ...orders];
+
+    for (const [id, quantity] of entries) {
+      const item = menu.find(food => food.id === id);
+      if (!item || item.stock < quantity) {
+        throw new Error(`${item?.name || "An item"} is no longer available in that quantity.`);
+      }
+    }
+    const total = entries.reduce((sum, [id, quantity]) =>
+      sum + menu.find(food => food.id === id).price * quantity, 0);
+    const wallet = walletBalanceInfo(total);
+    if (payment === "Wallet" && !wallet.canUseWallet) {
+      throw new Error("Your points balance is insufficient to use Wallet. Choose another payment option or earn more points.");
+    }
+
+    if (realtimeEnabled) {
+      for (const [id, quantity] of entries) {
+        const remainingStock = await changeSharedStock(id, -quantity);
+        reserved.push([id, quantity]);
+        menu.find(food => food.id === id).stock = remainingStock;
+      }
+    }
+
+    const items = entries.map(([id, quantity]) => {
+      const item = menu.find(food => food.id === id);
+      return { id, name: item.name, quantity, price: item.price };
+    });
+    const walletDiscount = payment === "Wallet" ? Number(wallet.discount.toFixed(2)) : 0;
+    const orderRef = realtimeEnabled ? ordersDatabase.ref("orders").push() : null;
+    const order = {
+      id: orderRef ? orderRef.key : `CS${Date.now().toString().slice(-6)}`,
+      owner: profile.id,
+      customer: profile.name,
+      grade: profile.grade,
+      section: profile.section,
+      items,
+      total: Number(total.toFixed(2)),
+      points: entries.reduce((sum, [id, quantity]) => sum + menu.find(food => food.id === id).points * quantity, 0),
+      payment: payment === "Wallet" ? `Wallet (${wallet.pointsUsed} points)` : payment,
+      walletDiscount,
+      pointsUsed: payment === "Wallet" ? wallet.pointsUsed : 0,
+      status: "Received",
+      createdAt: Date.now()
+    };
+
+    if (realtimeEnabled) {
+      await orderRef.set(order);
+    } else {
+      entries.forEach(([id, quantity]) => {
+        menu.find(food => food.id === id).stock -= quantity;
+      });
+      orders = [order, ...orders];
+    }
+    cart = {};
+    if (!realtimeEnabled) write(STORAGE.orders, orders);
+    write(STORAGE.menu, menu);
+    customerTab = "Orders";
+    render();
+    toast(`Order ${order.id} sent to the canteen!`);
+  } catch (error) {
+    for (const [id, quantity] of reserved.reverse()) {
+      try {
+        const restoredStock = await changeSharedStock(id, quantity);
+        const item = menu.find(food => food.id === id);
+        if (item) item.stock = restoredStock;
+      } catch (rollbackError) {
+        console.error(`Unable to restore stock for ${id} after order failure.`, rollbackError);
+      }
+    }
+    console.error("Unable to complete checkout.", error);
+    if (checkoutButton) checkoutButton.disabled = false;
+    toast(error.message || "Order was not sent. Check your connection and try again.");
   }
-  cart = {};
-  if (!realtimeEnabled) write(STORAGE.orders, orders);
-  write(STORAGE.menu, menu);
-  customerTab = "Orders";
-  render();
-  toast(`Order ${order.id} sent to the canteen!`);
 }
 
 function openTracker(orderId) {
@@ -657,10 +747,67 @@ function updateCart(id, amount) {
   renderCustomer();
 }
 
+function salesReportContent() {
+  const dayCount = salesPeriod === "week" ? 7 : 30;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = new Date(today);
+  start.setDate(start.getDate() - dayCount + 1);
+  const bucketCount = salesPeriod === "week" ? 7 : 5;
+  const buckets = Array.from({ length: bucketCount }, (_, index) => ({
+    label: salesPeriod === "week" ? "" : `Week ${index + 1}`,
+    revenue: 0
+  }));
+  const completed = orders.filter(order => order.status === "Completed");
+  const periodOrders = completed.filter(order => Number(order.createdAt) >= start.getTime() && Number(order.createdAt) < today.getTime() + 86_400_000);
+  periodOrders.forEach(order => {
+    const orderDate = new Date(Number(order.createdAt));
+    orderDate.setHours(0, 0, 0, 0);
+    const dayIndex = Math.floor((orderDate.getTime() - start.getTime()) / 86_400_000);
+    const bucketIndex = salesPeriod === "week" ? dayIndex : Math.min(4, Math.floor(dayIndex / 7));
+    if (bucketIndex >= 0 && bucketIndex < buckets.length) {
+      buckets[bucketIndex].revenue += Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0));
+    }
+  });
+  if (salesPeriod === "week") {
+    buckets.forEach((bucket, index) => {
+      const date = new Date(start);
+      date.setDate(start.getDate() + index);
+      bucket.label = date.toLocaleDateString([], { weekday: "short" });
+    });
+  }
+  const currentRevenue = buckets.reduce((sum, bucket) => sum + bucket.revenue, 0);
+  const previousStart = new Date(start);
+  previousStart.setDate(start.getDate() - dayCount);
+  const previousRevenue = completed.filter(order =>
+    Number(order.createdAt) >= previousStart.getTime() && Number(order.createdAt) < start.getTime()
+  ).reduce((sum, order) => sum + Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)), 0);
+  const progress = previousRevenue ? ((currentRevenue - previousRevenue) / previousRevenue) * 100 : null;
+  const maxRevenue = Math.max(...buckets.map(bucket => bucket.revenue), 1);
+  const demand = new Map();
+  periodOrders.forEach(order => order.items.forEach(item => {
+    const key = item.id || item.name;
+    const current = demand.get(key) || { name: item.name, quantity: 0 };
+    current.quantity += Number(item.quantity || 0);
+    demand.set(key, current);
+  }));
+  const topProducts = [...demand.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 5);
+
+  return `<div class="panel sales-report">
+    <div class="section-heading" style="margin-top:0"><div><h2>Sales report</h2><p class="subtle" style="margin:5px 0 0">${salesPeriod === "week" ? "Last 7 days" : "Last 30 days"} · completed orders</p></div><div class="payment-options" style="max-width:180px"><button class="payment-option ${salesPeriod === "week" ? "active" : ""}" data-sales-period="week">Weekly</button><button class="payment-option ${salesPeriod === "month" ? "active" : ""}" data-sales-period="month">Monthly</button></div></div>
+    <div class="stats-grid" style="margin:14px 0"><div class="stat-card"><span>Net sales</span><strong>${money(currentRevenue)}</strong></div><div class="stat-card"><span>vs. previous ${salesPeriod === "week" ? "week" : "30 days"}</span><strong>${progress === null ? "—" : `${progress >= 0 ? "+" : ""}${progress.toFixed(1)}%`}</strong></div></div>
+    <div class="sales-chart" style="grid-template-columns:repeat(${bucketCount},minmax(0,1fr))" role="img" aria-label="${salesPeriod === "week" ? "Weekly" : "Monthly"} completed sales bar chart">
+      ${buckets.map(bucket => `<div class="sales-bar-column" title="${escapeHTML(bucket.label)}: ${money(bucket.revenue)}"><span class="sales-bar-value">${bucket.revenue ? money(bucket.revenue) : "—"}</span><span class="sales-bar" style="height:${bucket.revenue ? Math.max(4, bucket.revenue / maxRevenue * 100) : 0}%"></span><span class="sales-bar-label">${escapeHTML(bucket.label)}</span></div>`).join("")}
+    </div>
+    <div class="sales-demand"><h3>Highest product demand</h3>${topProducts.length ? `<ol>${topProducts.map(item => `<li><span>${escapeHTML(item.name)}</span><strong>${item.quantity} sold</strong></li>`).join("")}</ol>` : `<p class="subtle">No completed sales in this period yet.</p>`}</div>
+  </div>`;
+}
+
 function renderStaff() {
   const name = escapeHTML(profile.name);
   const dailyOrders = todayOrders();
-  const sales = dailyOrders.filter(order => order.status === "Completed").reduce((sum, order) => sum + order.total, 0);
+  const sales = dailyOrders.filter(order => order.status === "Completed").reduce((sum, order) =>
+    sum + Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)), 0);
   document.getElementById("app").innerHTML = `<div class="app-shell">  <header class="topbar"><div class="brand"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em><span style="font:600 11px 'DM Sans';color:#78827b;letter-spacing:0;margin-left:4px">STAFF</span></div><div class="top-actions"><button class="share-button" data-install-app aria-label="Add to Home Screen" type="button">＋ Add to Home Screen</button><button class="share-button" data-share-app type="button">▦ Share app</button><button class="icon-button" id="logout">Sign out</button><div class="user-chip"><span class="avatar">${name.charAt(0)}</span><span class="user-name">${name}</span></div></div></header>
     <main class="staff-page"><div class="staff-header"><div><div class="eyebrow">Canteen operations</div><h1>Good day, ${name.split(" ")[0]}</h1><p class="subtle" style="margin:0">Manage today's orders, stock and menu.</p></div><span class="live-pill ${realtimeStatus === "error" ? "sync-error" : ""}">${realtimeEnabled ? `● ${realtimeStatus === "live" ? "LIVE SYNC" : realtimeStatus === "error" ? "SYNC ERROR" : "CONNECTING"}` : "● THIS DEVICE ONLY"}</span></div>
     <div class="stats-grid" style="margin-bottom:20px"><div class="stat-card"><span>Today's orders</span><strong>${dailyOrders.length}</strong></div><div class="stat-card"><span>Today's completed sales</span><strong>${money(sales)}</strong></div><div class="stat-card"><span>Menu items</span><strong>${menu.length}</strong></div><div class="stat-card"><span>Low stock items</span><strong>${menu.filter(item => item.stock <= 5).length}</strong></div></div>
@@ -672,6 +819,10 @@ function renderStaff() {
   bindShareApp();
   bindInstallApp();
   document.querySelectorAll("[data-staff-tab]").forEach(button => button.addEventListener("click", () => { staffTab = button.dataset.staffTab; renderStaff(); }));
+  document.querySelectorAll("[data-sales-period]").forEach(button => button.addEventListener("click", () => {
+    salesPeriod = button.dataset.salesPeriod;
+    renderStaff();
+  }));
   document.querySelectorAll("[data-status]").forEach(select => select.addEventListener("change", () => {
     const order = orders.find(item => item.id === select.dataset.status);
     if (!order) return;
@@ -694,7 +845,18 @@ function renderStaff() {
   document.querySelectorAll("[data-stock]").forEach(input => input.addEventListener("change", () => {
     const item = menu.find(food => food.id === input.dataset.stock);
     if (!item) return;
-    item.stock = Math.max(0, Number(input.value) || 0);
+    const updatedStock = Math.max(0, Number(input.value) || 0);
+    if (realtimeEnabled) {
+      ordersDatabase.ref("menu").child(item.id).child("stock").set(updatedStock).then(() => {
+        toast(`${item.name} stock updated.`);
+      }).catch(error => {
+        console.error("Unable to update shared stock.", error);
+        toast("Could not update stock. Check staff access and your connection.");
+        renderStaff();
+      });
+      return;
+    }
+    item.stock = updatedStock;
     write(STORAGE.menu, menu);
     renderStaff();
     toast(`${item.name} stock updated.`);
@@ -706,8 +868,10 @@ function renderStaff() {
 
 function staffOrdersContent() {
   const sorted = todayOrders().sort((a, b) => b.createdAt - a.createdAt);
-  if (!sorted.length) return `<div class="empty-state"><div class="empty-icon">📋</div>No orders today. New customer orders will appear here.</div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Placed</th><th>Status</th></tr></thead><tbody>${sorted.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}<div class="subtle" style="font-size:10px">${escapeHTML(order.grade)} · ${escapeHTML(order.section)}</div></td><td>${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</td><td>${money(order.total)}</td><td>${escapeHTML(order.payment)}</td><td>${new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td><select class="status-select" data-status="${escapeHTML(order.id)}">${statuses.map(status => `<option ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table></div>`;
+  const orderContent = sorted.length
+    ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Placed</th><th>Status</th></tr></thead><tbody>${sorted.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}<div class="subtle" style="font-size:10px">${escapeHTML(order.grade)} · ${escapeHTML(order.section)}</div></td><td>${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? `<div class="subtle" style="font-size:10px">after points</div>` : ""}</td><td>${escapeHTML(order.payment)}</td><td>${new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td><select class="status-select" data-status="${escapeHTML(order.id)}">${statuses.map(status => `<option ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty-state"><div class="empty-icon">📋</div>No orders today. New customer orders will appear here.</div>`;
+  return `${salesReportContent()}${orderContent}`;
 }
 
 function staffStockContent() {
@@ -715,11 +879,12 @@ function staffStockContent() {
 }
 
 function staffMenuContent() {
-  return `<div class="section-heading" style="margin-top:0"><div><h2>Live menu editor</h2><p class="subtle" style="margin:5px 0 0">Changes save immediately on this device.</p></div><button id="add-menu-item" class="primary" style="width:auto">＋ Add item</button></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji">${escapeHTML(item.emoji)}</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="subtle" style="font-size:11px;margin-top:3px">${escapeHTML(item.category)} · ${money(item.price)} · ${item.stock} in stock</div></div></div><button class="secondary" data-edit-menu="${escapeHTML(item.id)}">Edit</button></div>`).join("")}`;
+  return `<div class="section-heading" style="margin-top:0"><div><h2>Live menu editor</h2><p class="subtle" style="margin:5px 0 0">${realtimeEnabled ? "Changes publish to all signed-in devices immediately." : "Changes are saved on this device only."}</p></div><button id="add-menu-item" class="primary" style="width:auto">＋ Add item</button></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji">${escapeHTML(item.emoji)}</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="subtle" style="font-size:11px;margin-top:3px">${escapeHTML(item.category)} · ${money(item.price)} · ${item.stock} in stock</div></div></div><button class="secondary" data-edit-menu="${escapeHTML(item.id)}">Edit</button></div>`).join("")}`;
 }
 
 function openMenuEditor(id = "") {
   const item = menu.find(food => food.id === id) || { name: "", category: "Meals", description: "", price: "", points: 1, stock: 0, emoji: "🍽️", tag: "", image: "" };
+  const startingStock = Number(item.stock);
   let image = item.image || "";
   document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field-grid"><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div><div class="field"><label for="item-emoji">Emoji fallback</label><input id="item-emoji" name="emoji" value="${escapeHTML(item.emoji)}" required></div></div><div class="field"><label for="item-image">Product photo</label><input id="item-image" name="image" type="file" accept="image/*"><img id="item-image-preview" class="menu-image-preview" src="${escapeHTML(image)}" alt="Product photo preview" ${image ? "" : "hidden"}><button class="secondary" id="remove-item-image" type="button" ${image ? "" : "hidden"}>Remove photo</button><span class="field-help">Choose a product photo. Images are resized to fit this device's local storage.</span></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" value="${item.stock}" required></div></div><div class="field"><label for="item-points">Points per item</label><input id="item-points" name="points" type="number" min="0" value="${item.points}" required></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
   bindModalClose();
@@ -747,7 +912,7 @@ function openMenuEditor(id = "") {
     imagePreview.hidden = true;
     removeImage.hidden = true;
   });
-  document.getElementById("menu-editor-form").addEventListener("submit", event => {
+  document.getElementById("menu-editor-form").addEventListener("submit", async event => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const updated = {
@@ -760,12 +925,33 @@ function openMenuEditor(id = "") {
       stock: Math.max(0, Number(data.get("stock"))),
       points: Math.max(0, Number(data.get("points"))),
       tag: item.tag || "",
-      image
+      image,
+      sortOrder: Number(item.sortOrder ?? (id ? menu.findIndex(food => food.id === id) : menu.length))
     };
+    const submitButton = event.currentTarget.querySelector("button[type='submit']");
+    if (submitButton) submitButton.disabled = true;
+    try {
+      if (realtimeEnabled && id) {
+        const result = await ordersDatabase.ref("menu").child(updated.id).transaction(current => ({
+          ...(current || {}),
+          ...updated,
+          stock: updated.stock === startingStock ? current?.stock ?? updated.stock : updated.stock
+        }), undefined, false);
+        if (!result.committed) throw new Error("The shared menu item could not be updated.");
+        Object.assign(updated, result.snapshot.val());
+      } else if (realtimeEnabled) {
+        await ordersDatabase.ref("menu").child(updated.id).set(updated);
+      }
+    } catch (error) {
+      console.error("Unable to publish menu change.", error);
+      if (submitButton) submitButton.disabled = false;
+      toast("Menu was not published. Check staff access and your connection.");
+      return;
+    }
     menu = id ? menu.map(food => food.id === id ? updated : food) : [...menu, updated];
     write(STORAGE.menu, menu);
     renderStaff();
-    toast("Menu saved.");
+    toast(realtimeEnabled ? "Menu published to all devices." : "Menu saved on this device.");
   });
 }
 
@@ -801,6 +987,10 @@ function logout() {
     orderSubscription.off("value");
     orderSubscription = null;
   }
+  if (menuSubscription) {
+    menuSubscription.off("value");
+    menuSubscription = null;
+  }
   if (realtimeEnabled && profile?.role === "Staff") {
     firebaseAuth.signOut().catch(error => console.error("Unable to sign out of Firebase.", error));
   }
@@ -818,12 +1008,14 @@ function logout() {
 
 window.addEventListener("storage", event => {
   if (event.key === STORAGE.orders && !realtimeEnabled) orders = read(STORAGE.orders, []);
-  if (event.key === STORAGE.menu) menu = read(STORAGE.menu, initialMenu);
+  if (event.key === STORAGE.menu && !realtimeEnabled) menu = read(STORAGE.menu, initialMenu);
   if (profile) render();
 });
 window.addEventListener("focus", () => {
-  if (!realtimeEnabled) orders = read(STORAGE.orders, []);
-  menu = read(STORAGE.menu, initialMenu);
+  if (!realtimeEnabled) {
+    orders = read(STORAGE.orders, []);
+    menu = read(STORAGE.menu, initialMenu);
+  }
   if (profile) render();
 });
 let displayedDay = dateKey(Date.now());
