@@ -2,7 +2,8 @@ const STORAGE = {
   profile: "campusnack.profile",
   orders: "campusnack.orders",
   menu: "campusnack.menu",
-  likes: "campusnack.likes"
+  likes: "campusnack.likes",
+  gcashQr: "campusnack.gcashQr"
 };
 const STAFF_CODE = "EAPIHS2009";
 const firebaseConfig = window.CAMPUSNACK_FIREBASE_CONFIG || {};
@@ -39,7 +40,9 @@ let menu = read(STORAGE.menu, initialMenu);
 let orders = read(STORAGE.orders, []);
 let profile = read(STORAGE.profile, null);
 let likes = new Set(read(STORAGE.likes, []));
+let gcashQr = read(STORAGE.gcashQr, null);
 let cart = {};
+let paymentReference = "";
 let category = "All";
 let query = "";
 let payment = "Wallet";
@@ -51,6 +54,7 @@ let firebaseAuth = null;
 let ordersDatabase = null;
 let orderSubscription = null;
 let menuSubscription = null;
+let paymentSettingsSubscription = null;
 let realtimeEnabled = false;
 let realtimeSetupError = null;
 let realtimeStatus = "connecting";
@@ -207,6 +211,7 @@ function connectOrderSync() {
   if (!realtimeEnabled || !firebaseAuth.currentUser || !profile) return;
   if (orderSubscription) orderSubscription.off("value");
   if (menuSubscription) menuSubscription.off("value");
+  if (paymentSettingsSubscription) paymentSettingsSubscription.off("value");
   const user = firebaseAuth.currentUser;
   const reference = ordersDatabase.ref("orders");
   const query = profile.role === "Staff" ? reference : reference.orderByChild("owner").equalTo(user.uid);
@@ -248,6 +253,22 @@ function connectOrderSync() {
   }, error => {
     console.error("Live menu synchronization failed.", error);
     toast("Live menu sync failed. Check Firebase database rules and your connection.");
+  });
+
+  paymentSettingsSubscription = ordersDatabase.ref("paymentSettings/gcashQr");
+  paymentSettingsSubscription.on("value", snapshot => {
+    const nextQr = snapshot.val() || null;
+    const qrChanged = gcashQr?.updatedAt !== nextQr?.updatedAt;
+    gcashQr = nextQr;
+    if (qrChanged && paymentReference) {
+      paymentReference = "";
+      if (payment === "QR") toast("The receiver QR changed. Check the current recipient and enter your payment reference again.");
+    }
+    write(STORAGE.gcashQr, gcashQr);
+    if (profile) render();
+  }, error => {
+    console.error("Live GCash QR synchronization failed.", error);
+    toast("The GCash payment QR could not be loaded. Check Firebase rules and your connection.");
   });
 }
 
@@ -302,6 +323,11 @@ function renderCustomer() {
   document.querySelectorAll("[data-add]").forEach(button => button.addEventListener("click", () => updateCart(button.dataset.add, 1)));
   document.querySelectorAll("[data-qty]").forEach(button => button.addEventListener("click", () => updateCart(button.dataset.id, Number(button.dataset.qty))));
   document.querySelectorAll("[data-payment]").forEach(button => button.addEventListener("click", () => { payment = button.dataset.payment; renderCustomer(); }));
+  document.getElementById("gcash-payment-reference")?.addEventListener("input", event => {
+    paymentReference = event.target.value;
+    const checkoutButton = document.getElementById("checkout");
+    if (checkoutButton) checkoutButton.disabled = !paymentReference.trim();
+  });
   document.getElementById("checkout")?.addEventListener("click", checkout);
   document.querySelectorAll("[data-track]").forEach(button => button.addEventListener("click", () => openTracker(button.dataset.track)));
   bindModalClose();
@@ -343,10 +369,10 @@ function cartContent() {
     <div class="cart-total"><span>Total</span><span>${money(total)}</span></div>
     ${payment === "Wallet" && wallet.canUseWallet ? `<div class="cart-total"><span>Points discount · ${wallet.pointsUsed} pts</span><span>−${money(wallet.discount)}</span></div><div class="cart-total"><strong>After points discount</strong><strong>${money(Math.max(0, total - wallet.discount))}</strong></div>` : ""}
     <div class="cart-reward">✦ You'll earn ${earned} points with this order</div>
-    <div class="payment-label">Choose how to pay</div><div class="payment-options">${["Wallet", "QR", "Cash"].map(method => `<button class="payment-option ${payment === method ? "active" : ""}" data-payment="${method}" ${method === "Wallet" && !wallet.canUseWallet ? "disabled title=\"Earn points from completed orders before using Wallet\"" : ""}>${method === "Wallet" ? "◉ Wallet" : method === "QR" ? "▦ QR pay" : "▤ Cash"}</button>`).join("")}</div>
+    <div class="payment-label">Choose how to pay</div><div class="payment-options">${["Wallet", "QR", "Cash"].map(method => `<button class="payment-option ${payment === method ? "active" : ""}" data-payment="${method}" ${method === "Wallet" && !wallet.canUseWallet ? "disabled title=\"Earn points from completed orders before using Wallet\"" : method === "QR" && !gcashQr?.imageData ? "disabled title=\"The canteen has not added a GCash QR yet\"" : ""}>${method === "Wallet" ? "◉ Wallet" : method === "QR" ? "▦ GCash QR" : "▤ Cash"}</button>`).join("")}</div>
     ${payment === "Wallet" ? `<div class="payment-label" style="margin-top:8px">Wallet points: ${wallet.availablePoints} pts · ${money(pointsToPeso(wallet.availablePoints))} available. Applying ${wallet.pointsUsed} pts (${money(wallet.discount)} discount). 50 points = ₱5.00. Demo only; no actual money is charged.</div>` : ""}
-    ${payment === "QR" ? `<div class="payment-label" style="margin-top:8px">Show your QR payment at the counter</div>` : ""}
-    <button class="primary" id="checkout" style="margin-top:15px" ${entries.length ? "" : "disabled"}>Place order · ${money(payment === "Wallet" ? Math.max(0, total - wallet.discount) : total)}</button>
+    ${payment === "QR" ? gcashQr?.imageData ? `<div class="gcash-payment"><p>Scan this GCash QR using another device, or save the image and use GCash's QR gallery option. Verify the recipient name in GCash before sending <strong>${money(total)}</strong>.</p><img src="${escapeHTML(gcashQr.imageData)}" alt="Canteen GCash payment QR code"><label for="gcash-payment-reference">GCash reference number</label><input id="gcash-payment-reference" type="text" maxlength="80" autocomplete="off" placeholder="Enter the reference number after paying" value="${escapeHTML(paymentReference)}"><small>Staff will check the transfer in GCash before confirming your order. Do not send money if the displayed recipient is incorrect.</small></div>` : `<div class="payment-label">The canteen has not set up a GCash QR code yet. Please choose another payment method.</div>` : ""}
+    <button class="primary" id="checkout" style="margin-top:15px" ${entries.length && (payment !== "QR" || paymentReference.trim()) ? "" : "disabled"}>${payment === "QR" ? "I sent payment · " : "Place order · "}${money(payment === "Wallet" ? Math.max(0, total - wallet.discount) : total)}</button>
   </div>`;
 }
 
@@ -354,7 +380,7 @@ function customerOrdersContent() {
   const list = customerOrders();
   return `<nav class="bottom-nav">${["Menu", "Orders", "Profile"].map(tab => `<button class="nav-tab ${customerTab === tab ? "active" : ""}" data-customer-tab="${tab}">${tab}</button>`).join("")}</nav>
     <div class="section-heading"><div><div class="eyebrow">Your canteen activity</div><h2>Order history</h2></div></div>
-    ${list.length ? `<div class="order-list">${list.map(order => `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(order.id)}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status">${escapeHTML(order.status)}</span></div><div style="font-size:12px;color:#657168">${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${order.points} pts</strong><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button></div><div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div></article>`).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
+    ${list.length ? `<div class="order-list">${list.map(order => `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(order.id)}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status">${escapeHTML(order.status)}</span></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">GCash transfer reported · awaiting staff verification</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">GCash payment confirmed by staff</p>` : ""}<div style="font-size:12px;color:#657168">${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${order.points} pts</strong><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button></div><div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div></article>`).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
 }
 
 function profileContent() {
@@ -383,6 +409,11 @@ async function checkout() {
   let reserved = [];
   try {
     if (realtimeEnabled) {
+      if (payment === "QR") {
+        const paymentSnapshot = await ordersDatabase.ref("paymentSettings/gcashQr").once("value");
+        gcashQr = paymentSnapshot.val() || null;
+        if (!gcashQr?.imageData) throw new Error("The canteen GCash QR is not configured. Choose another payment method.");
+      }
       const snapshot = await ordersDatabase.ref("menu").once("value");
       const values = snapshot.val();
       if (!values) throw new Error("The shared menu has not been published by staff yet.");
@@ -401,6 +432,9 @@ async function checkout() {
     const wallet = walletBalanceInfo(total);
     if (payment === "Wallet" && !wallet.canUseWallet) {
       throw new Error("Your points balance is insufficient to use Wallet. Choose another payment option or earn more points.");
+    }
+    if (payment === "QR" && (!gcashQr?.imageData || !paymentReference.trim())) {
+      throw new Error("Select an available GCash QR and enter the transfer reference number after paying.");
     }
 
     if (realtimeEnabled) {
@@ -429,6 +463,11 @@ async function checkout() {
       payment: payment === "Wallet" ? `Wallet (${wallet.pointsUsed} points)` : payment,
       walletDiscount,
       pointsUsed: payment === "Wallet" ? wallet.pointsUsed : 0,
+      paymentStatus: payment === "QR" ? "pending_review" : "not_required",
+      ...(payment === "QR" ? {
+        paymentReference: paymentReference.trim(),
+        gcashQrUpdatedAt: Number(gcashQr.updatedAt || 0)
+      } : {}),
       status: "Received",
       createdAt: Date.now()
     };
@@ -442,6 +481,7 @@ async function checkout() {
       orders = [order, ...orders];
     }
     cart = {};
+    paymentReference = "";
     if (!realtimeEnabled) write(STORAGE.orders, orders);
     write(STORAGE.menu, menu);
     customerTab = "Orders";
@@ -466,7 +506,7 @@ async function checkout() {
 function openTracker(orderId) {
   const order = customerOrders().find(item => item.id === orderId);
   if (!order) return;
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="tracker-title"><div class="modal-head"><h2 id="tracker-title">Track your order</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle" style="margin:9px 0">Order ${escapeHTML(order.id)}</p><div class="tracker-box"><div style="font-size:30px;margin-bottom:8px">🍱</div><strong>${escapeHTML(order.status)}</strong><p class="subtle" style="font-size:12px;margin:5px 0 0">${order.status === "Ready for pickup" ? "Head to the canteen counter when you're ready." : order.status === "Completed" ? "Enjoy your meal! Points are in your rewards." : "The canteen team is working on your order."}</p></div><div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div><p class="footer-note">${realtimeEnabled ? "Order status syncs in real time with the canteen." : "This tracker updates when the canteen updates your order on this device."}</p></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="tracker-title"><div class="modal-head">  <h2 id="tracker-title">Track your order</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle" style="margin:9px 0">Order ${escapeHTML(order.id)}</p><div class="tracker-box"><div style="font-size:30px;margin-bottom:8px">🍱</div><strong>${escapeHTML(order.status)}</strong><p class="subtle" style="font-size:12px;margin:5px 0 0">${order.status === "Ready for pickup" ? "Head to the canteen counter when you're ready." : order.status === "Completed" ? "Enjoy your meal! Points are in your rewards." : "The canteen team is working on your order."}</p></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">Your GCash reference ${escapeHTML(order.paymentReference || "")} is waiting for staff to verify the transfer.</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">Staff confirmed your GCash payment.</p>` : ""}<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div><p class="footer-note">${realtimeEnabled ? "Order status syncs in real time with the canteen." : "This tracker updates when the canteen updates your order on this device."}</p></section></div>`;
   bindModalClose();
 }
 
@@ -811,8 +851,8 @@ function renderStaff() {
   document.getElementById("app").innerHTML = `<div class="app-shell">  <header class="topbar"><div class="brand"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em><span style="font:600 11px 'DM Sans';color:#78827b;letter-spacing:0;margin-left:4px">STAFF</span></div><div class="top-actions"><button class="share-button" data-install-app aria-label="Add to Home Screen" type="button">＋ Add to Home Screen</button><button class="share-button" data-share-app type="button">▦ Share app</button><button class="icon-button" id="logout">Sign out</button><div class="user-chip"><span class="avatar">${name.charAt(0)}</span><span class="user-name">${name}</span></div></div></header>
     <main class="staff-page"><div class="staff-header"><div><div class="eyebrow">Canteen operations</div><h1>Good day, ${name.split(" ")[0]}</h1><p class="subtle" style="margin:0">Manage today's orders, stock and menu.</p></div><span class="live-pill ${realtimeStatus === "error" ? "sync-error" : ""}">${realtimeEnabled ? `● ${realtimeStatus === "live" ? "LIVE SYNC" : realtimeStatus === "error" ? "SYNC ERROR" : "CONNECTING"}` : "● THIS DEVICE ONLY"}</span></div>
     <div class="stats-grid" style="margin-bottom:20px"><div class="stat-card"><span>Today's orders</span><strong>${dailyOrders.length}</strong></div><div class="stat-card"><span>Today's completed sales</span><strong>${money(sales)}</strong></div><div class="stat-card"><span>Menu items</span><strong>${menu.length}</strong></div><div class="stat-card"><span>Low stock items</span><strong>${menu.filter(item => item.stock <= 5).length}</strong></div></div>
-    <nav class="staff-nav">${["Orders", "Stock", "Menu"].map(tab => `<button class="nav-tab ${staffTab === tab ? "active" : ""}" data-staff-tab="${tab}">${tab}</button>`).join("")}</nav>
-    <section class="staff-content">${staffTab === "Orders" ? staffOrdersContent() : staffTab === "Stock" ? staffStockContent() : staffMenuContent()}</section>
+    <nav class="staff-nav">${["Orders", "Stock", "Menu", "Payments"].map(tab => `<button class="nav-tab ${staffTab === tab ? "active" : ""}" data-staff-tab="${tab}">${tab}</button>`).join("")}</nav>
+    <section class="staff-content">${staffTab === "Orders" ? staffOrdersContent() : staffTab === "Stock" ? staffStockContent() : staffTab === "Menu" ? staffMenuContent() : staffPaymentsContent()}</section>
     <p class="footer-note">${realtimeEnabled ? "Live order queue connected to Firebase. Only staff UIDs allowlisted in Realtime Database rules can view or update the shared queue." : "Staff mode is a local demo. Orders and edits are stored in this browser and are not shared across devices."}</p></main>
     <div id="modal-root"></div></div>`;
   document.getElementById("logout").addEventListener("click", logout);
@@ -842,6 +882,34 @@ function renderStaff() {
       toast(`Order ${order.id} updated.`);
     }
   }));
+  document.querySelectorAll("[data-payment-review]").forEach(button => button.addEventListener("click", async () => {
+    const order = orders.find(item => item.id === button.dataset.paymentReview);
+    if (!order || order.paymentStatus !== "pending_review") return;
+    button.disabled = true;
+    try {
+      const verifiedAt = Date.now();
+      if (realtimeEnabled) {
+        await ordersDatabase.ref("orders").child(order.id).update({
+          paymentStatus: "paid",
+          paymentVerifiedAt: verifiedAt,
+          paymentVerifiedBy: profile.name
+        });
+      } else {
+        order.paymentStatus = "paid";
+        order.paymentVerifiedAt = verifiedAt;
+        order.paymentVerifiedBy = profile.name;
+        write(STORAGE.orders, orders);
+        renderStaff();
+      }
+      toast(`Payment for order ${order.id} confirmed.`);
+    } catch (error) {
+      console.error(`Unable to confirm GCash payment for order ${order.id}.`, error);
+      toast("Payment could not be confirmed. Check staff access and your connection.");
+      renderStaff();
+    }
+  }));
+  document.getElementById("gcash-qr-form")?.addEventListener("submit", saveGcashQr);
+  document.getElementById("remove-gcash-qr")?.addEventListener("click", removeGcashQr);
   document.querySelectorAll("[data-stock]").forEach(input => input.addEventListener("change", () => {
     const item = menu.find(food => food.id === input.dataset.stock);
     if (!item) return;
@@ -869,9 +937,105 @@ function renderStaff() {
 function staffOrdersContent() {
   const sorted = todayOrders().sort((a, b) => b.createdAt - a.createdAt);
   const orderContent = sorted.length
-    ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Placed</th><th>Status</th></tr></thead><tbody>${sorted.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}<div class="subtle" style="font-size:10px">${escapeHTML(order.grade)} · ${escapeHTML(order.section)}</div></td><td>${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? `<div class="subtle" style="font-size:10px">after points</div>` : ""}</td><td>${escapeHTML(order.payment)}</td><td>${new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td><select class="status-select" data-status="${escapeHTML(order.id)}">${statuses.map(status => `<option ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Placed</th><th>Status</th></tr></thead><tbody>${sorted.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}<div class="subtle" style="font-size:10px">${escapeHTML(order.grade)} · ${escapeHTML(order.section)}</div></td><td>${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? `<div class="subtle" style="font-size:10px">after points</div>` : ""}</td><td>${escapeHTML(order.payment)}${order.payment === "QR" ? `<div class="${order.paymentStatus === "paid" ? "payment-confirmed-note" : "payment-review-note"}">${order.paymentStatus === "paid" ? "Verified" : "Awaiting verification"}</div>` : ""}</td><td>${new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>${order.payment === "QR" && order.paymentStatus !== "paid" ? `<span class="subtle">Verify payment first</span>` : `<select class="status-select" data-status="${escapeHTML(order.id)}">${statuses.map(status => `<option ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}</select>`}</td></tr>`).join("")}</tbody></table></div>`
     : `<div class="empty-state"><div class="empty-icon">📋</div>No orders today. New customer orders will appear here.</div>`;
   return `${salesReportContent()}${orderContent}`;
+}
+
+function staffPaymentsContent() {
+  const pendingPayments = orders
+    .filter(order => order.payment === "QR" && order.paymentStatus === "pending_review")
+    .sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
+  const recentConfirmed = orders
+    .filter(order => order.payment === "QR" && order.paymentStatus === "paid")
+    .sort((a, b) => Number(b.paymentVerifiedAt || 0) - Number(a.paymentVerifiedAt || 0))
+    .slice(0, 10);
+  return `<div class="section-heading" style="margin-top:0"><div><h2>GCash receiver QR</h2><p class="subtle" style="margin:5px 0 0">${realtimeEnabled ? "This QR is shared live with signed-in students and teachers." : "Local demo only; this setting is not shared across devices."}</p></div></div>
+    <div class="gcash-settings panel">
+      ${gcashQr?.imageData ? `<img class="gcash-qr-preview" src="${escapeHTML(gcashQr.imageData)}" alt="Current GCash receiver QR"><p class="subtle">Current receiver QR${gcashQr.updatedAt ? ` · updated ${new Date(gcashQr.updatedAt).toLocaleString()}` : ""}.</p>` : `<p class="subtle">No GCash receiver QR is configured. Students and teachers cannot select GCash QR pay until you add one.</p>`}
+      <form id="gcash-qr-form"><label for="gcash-qr-file">Upload the canteen's official GCash QR image</label><input id="gcash-qr-file" type="file" accept="image/png,image/jpeg,image/webp" required><p class="field-help">Upload only the payment QR image. After saving, check the recipient name and test it with a small payment before accepting orders.</p><button class="primary" type="submit">Save and share receiver QR</button></form>
+      ${gcashQr?.imageData ? `<button id="remove-gcash-qr" class="secondary" type="button" style="margin-top:10px">Remove receiver QR</button>` : ""}
+    </div>
+    <div class="section-heading"><div><h2>Payments needing review</h2><p class="subtle" style="margin:5px 0 0">Check each transfer in the receiver's GCash account before confirming.</p></div></div>
+    ${pendingPayments.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>GCash reference</th><th>Submitted</th><th>Review</th></tr></thead><tbody>${pendingPayments.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "Missing")}</td><td>${new Date(order.createdAt).toLocaleString()}</td><td><button class="primary confirm-payment" type="button" data-payment-review="${escapeHTML(order.id)}">Confirm received</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>No GCash transfers are waiting for review.</div>`}
+    <div class="section-heading"><div><h2>Recently confirmed</h2></div></div>
+    ${recentConfirmed.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>Reference</th><th>Confirmed by</th></tr></thead><tbody>${recentConfirmed.map(order => `<tr><td>${escapeHTML(order.id)}</td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "")}</td><td>${escapeHTML(order.paymentVerifiedBy || "")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No GCash payments have been confirmed yet.</p>`}
+    <p class="payment-review-note">CampuSnack cannot check GCash transactions automatically. Confirm only after the amount and reference are visible in the receiver's GCash transaction history. Never use a customer's screenshot alone as proof of payment.</p>`;
+}
+
+async function saveGcashQr(event) {
+  event.preventDefault();
+  const input = document.getElementById("gcash-qr-file");
+  const submitButton = event.currentTarget.querySelector("button[type='submit']");
+  const file = input.files?.[0];
+  if (!file) {
+    toast("Choose the official GCash QR image first.");
+    return;
+  }
+  if (submitButton) submitButton.disabled = true;
+  try {
+    const imageData = await resizeGcashQr(file);
+    if (imageData.length > 300_000) throw new Error("The QR image is too large. Choose a smaller or cropped image.");
+    const settings = { imageData, updatedAt: Date.now() };
+    if (realtimeEnabled) {
+      await ordersDatabase.ref("paymentSettings/gcashQr").set(settings);
+    } else {
+      gcashQr = settings;
+      write(STORAGE.gcashQr, gcashQr);
+    }
+    renderStaff();
+    toast(realtimeEnabled ? "GCash QR shared with all signed-in customers." : "GCash QR saved on this device only.");
+  } catch (error) {
+    console.error("Unable to save the GCash receiver QR.", error);
+    if (submitButton) submitButton.disabled = false;
+    toast(error.message || "Could not save the GCash QR. Check staff access and try again.");
+  }
+}
+
+async function removeGcashQr() {
+  try {
+    if (realtimeEnabled) {
+      await ordersDatabase.ref("paymentSettings/gcashQr").remove();
+    } else {
+      gcashQr = null;
+      write(STORAGE.gcashQr, null);
+    }
+    gcashQr = null;
+    renderStaff();
+    toast("GCash QR removed. QR payment is unavailable until another code is added.");
+  } catch (error) {
+    console.error("Unable to remove the GCash receiver QR.", error);
+    toast("Could not remove the GCash QR. Check staff access and try again.");
+  }
+}
+
+function resizeGcashQr(file) {
+  if (!file.type.startsWith("image/")) return Promise.reject(new Error("Choose a valid QR image file."));
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error("Unable to read the QR image."));
+    reader.onload = () => {
+      const source = new Image();
+      source.onerror = () => reject(new Error("Unable to decode the QR image."));
+      source.onload = () => {
+        const scale = Math.min(1, 900 / Math.max(source.naturalWidth, source.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(source.naturalHeight * scale));
+        const context = canvas.getContext("2d");
+        if (!context) {
+          reject(new Error("Canvas is unavailable."));
+          return;
+        }
+        context.fillStyle = "#fff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(source, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      source.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function staffStockContent() {
@@ -991,6 +1155,10 @@ function logout() {
     menuSubscription.off("value");
     menuSubscription = null;
   }
+  if (paymentSettingsSubscription) {
+    paymentSettingsSubscription.off("value");
+    paymentSettingsSubscription = null;
+  }
   if (realtimeEnabled && profile?.role === "Staff") {
     firebaseAuth.signOut().catch(error => console.error("Unable to sign out of Firebase.", error));
   }
@@ -1009,12 +1177,14 @@ function logout() {
 window.addEventListener("storage", event => {
   if (event.key === STORAGE.orders && !realtimeEnabled) orders = read(STORAGE.orders, []);
   if (event.key === STORAGE.menu && !realtimeEnabled) menu = read(STORAGE.menu, initialMenu);
+  if (event.key === STORAGE.gcashQr && !realtimeEnabled) gcashQr = read(STORAGE.gcashQr, null);
   if (profile) render();
 });
 window.addEventListener("focus", () => {
   if (!realtimeEnabled) {
     orders = read(STORAGE.orders, []);
     menu = read(STORAGE.menu, initialMenu);
+    gcashQr = read(STORAGE.gcashQr, null);
   }
   if (profile) render();
 });

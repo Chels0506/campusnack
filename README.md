@@ -19,7 +19,15 @@ Cross-device order and status updates require Firebase Realtime Database and Fir
 
 When Firebase is configured, staff see the shared live order queue and status changes propagate in real time. The first allowlisted staff session publishes the initial menu; later staff edits and stock adjustments are shared with signed-in staff, students, and teachers. Orders reserve shared stock using Realtime Database transactions, so concurrent orders cannot successfully take the same remaining units. Customers can read only their own orders; staff UIDs in the database allowlist can read and update the queue and menu. If Firebase is not configured, the app keeps using local-only mode. If configuration is partially filled or Firebase fails to load, staff authentication is disabled rather than falling back to the local demo code.
 
-After changing `database.rules.json`, publish the updated rules in Realtime Database → **Rules**. The `menu` path must allow authenticated reads, allowlisted staff edits, and customer stock decrements used by checkout. The client-side demo is not a trusted payment or inventory system; production use should validate order creation, inventory, and points on a trusted server.
+After changing `database.rules.json`, publish the updated rules in Realtime Database → **Rules**. The `menu` path must allow authenticated reads, allowlisted staff edits, and customer stock decrements used by checkout. The `paymentSettings/gcashQr` path allows authenticated customers to read the receiver QR and only allowlisted staff to replace or remove it. The client-side demo is not a trusted payment or inventory system; production use should validate order creation, inventory, and points on a trusted server.
+
+## GCash QR payments
+
+1. Sign in as an allowlisted staff member, open **Payments**, and upload the canteen's official GCash QR image. Replacing or removing it updates the QR shown to signed-in customers in real time.
+2. Customers choose **GCash QR**, scan the displayed code from another device or use GCash's QR gallery option, verify the recipient name in GCash, send the exact order amount, then enter the GCash transaction reference before submitting the order.
+3. Staff open **Payments**, compare the submitted amount and reference against the receiver account's GCash transaction history, and click **Confirm received** only after the funds actually appear.
+
+This app does not connect to GCash or verify transfers automatically. Orders paid by QR remain blocked from preparation until staff confirms them. Never treat a customer screenshot alone as proof of payment, and do not upload account passwords, PINs, or other credentials. Use only a QR issued for the canteen's authorized receiving account.
 
 ## Points and sales reports
 

@@ -4,6 +4,13 @@
       ".read": false,
       ".write": false
     },
+    "paymentSettings": {
+      ".read": "auth != null",
+      "gcashQr": {
+        ".write": "auth != null && root.child('staffUids').child(auth.uid).val() === true",
+        ".validate": "newData.hasChildren(['imageData', 'updatedAt']) && newData.child('imageData').isString() && newData.child('imageData').val().length <= 300000 && newData.child('updatedAt').isNumber()"
+      }
+    },
     "menu": {
       ".read": "auth != null",
       "$itemId": {
@@ -16,8 +23,8 @@
       ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || (query.orderByChild === 'owner' && query.equalTo === auth.uid))",
       "$orderId": {
         ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || data.child('owner').val() === auth.uid)",
-        ".write": "auth != null && ((!data.exists() && newData.child('owner').val() === auth.uid && newData.child('status').val() === 'Received') || (root.child('staffUids').child(auth.uid).val() === true && newData.exists()))",
-        ".validate": "newData.hasChildren(['id', 'owner', 'customer', 'items', 'total', 'points', 'payment', 'status', 'createdAt']) && newData.child('id').val() === $orderId && (newData.child('status').val() === 'Received' || newData.child('status').val() === 'Preparing' || newData.child('status').val() === 'Ready for pickup' || newData.child('status').val() === 'Completed')"
+        ".write": "auth != null && ((!data.exists() && newData.child('owner').val() === auth.uid && newData.child('status').val() === 'Received' && newData.child('paymentStatus').val() !== 'paid' && ((newData.child('payment').val() === 'QR' && newData.child('paymentStatus').val() === 'pending_review' && newData.child('paymentReference').isString() && newData.child('paymentReference').val().length > 0) || (newData.child('payment').val() !== 'QR' && newData.child('paymentStatus').val() === 'not_required'))) || (root.child('staffUids').child(auth.uid).val() === true && newData.exists()))",
+        ".validate": "newData.hasChildren(['id', 'owner', 'customer', 'items', 'total', 'points', 'payment', 'status', 'createdAt']) && newData.child('id').val() === $orderId && (newData.child('status').val() === 'Received' || newData.child('status').val() === 'Preparing' || newData.child('status').val() === 'Ready for pickup' || newData.child('status').val() === 'Completed') && (!newData.child('paymentStatus').exists() || newData.child('paymentStatus').val() === 'pending_review' || newData.child('paymentStatus').val() === 'paid' || newData.child('paymentStatus').val() === 'not_required') && (!newData.child('paymentReference').exists() || (newData.child('paymentReference').isString() && newData.child('paymentReference').val().length <= 80))"
       }
     }
   }
