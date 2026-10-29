@@ -64,12 +64,8 @@ let realtimeSetupError = null;
 let realtimeStatus = "connecting";
 let salesPeriod = "week";
 let customerAuthMode = "signin";
-let pendingCustomerProfile = null;
-let pendingPhoneConfirmation = null;
-let pendingPhoneNumber = "";
-let pendingPhoneUser = null;
+let pendingCustomerUser = null;
 let pendingCustomerRole = "Student";
-let phoneRecaptchaVerifier = null;
 
 function setupRealtime() {
   const configValues = ["apiKey", "authDomain", "databaseURL", "projectId", "appId"];
@@ -142,17 +138,18 @@ function renderLogin(selectedRole = "Student") {
       <section class="auth-form-wrap">
         <form class="auth-form" id="login-form">
           <div class="eyebrow">Welcome to the canteen</div>
-          <h2>${selectedRole === "Staff" ? "Canteen staff sign in" : realtimeEnabled && customerAuthMode === "create" ? "Create an account with SMS" : "Let's get you started"}</h2>
-          <p class="subtle">${selectedRole === "Staff" ? realtimeEnabled ? "Sign in with your Firebase staff account." : "Enter your name and local demo staff code to continue." : realtimeEnabled ? "Enter your phone number to receive a sign-in code by SMS. No email or password is needed." : "Sign in with your school details to continue."}</p>
+          <h2>${selectedRole === "Staff" ? "Canteen staff sign in" : realtimeEnabled && customerAuthMode === "create" ? "Create your account" : "Let's get you started"}</h2>
+          <p class="subtle">${selectedRole === "Staff" ? realtimeEnabled ? "Sign in with your Firebase staff account." : "Enter your name and local demo staff code to continue." : realtimeEnabled ? "Use your email and password to securely access your school canteen account." : "Sign in with your school details to continue."}</p>
           <div class="role-switch" aria-label="Choose account type">
             ${["Student", "Teacher", "Staff"].map(role => `<button type="button" class="${role === selectedRole ? "active" : ""}" data-role="${role}">${role}</button>`).join("")}
           </div>
-          ${selectedRole !== "Staff" && realtimeEnabled ? `<div class="role-switch auth-mode-switch" aria-label="Choose sign-in mode"><button type="button" class="${customerAuthMode === "signin" ? "active" : ""}" data-auth-mode="signin">Sign in</button><button type="button" class="${customerAuthMode === "create" ? "active" : ""}" data-auth-mode="create">Create account</button></div><div class="field"><label for="customer-phone">Mobile phone number</label><input id="customer-phone" name="phoneNumber" type="tel" autocomplete="tel" inputmode="tel" placeholder="+639171234567" pattern="\\+[1-9][0-9]{7,14}" title="Use international format, for example +639171234567" required></div><div id="recaptcha-container"></div>` : ""}
+          ${selectedRole !== "Staff" && realtimeEnabled ? `<div class="role-switch auth-mode-switch" aria-label="Choose sign-in mode"><button type="button" class="${customerAuthMode === "signin" ? "active" : ""}" data-auth-mode="signin">Sign in</button><button type="button" class="${customerAuthMode === "create" ? "active" : ""}" data-auth-mode="create">Create account</button></div>` : ""}
           ${selectedRole === "Staff" || !realtimeEnabled || customerAuthMode === "create" ? `<div class="field"><label for="full-name">Full name</label><input id="full-name" name="name" autocomplete="name" placeholder="e.g. Alex Santos" required></div>` : ""}
-          ${selectedRole === "Staff" || !realtimeEnabled ? `<div class="field"><label for="gmail-address">Gmail address</label><input id="gmail-address" name="email" type="email" autocomplete="email" placeholder="you@gmail.com" required pattern="^[^@\\s]+@gmail\\.com$" title="Use a Gmail address ending in @gmail.com"></div>` : ""}
+          <div class="field"><label for="email-address">Email address</label><input id="email-address" name="email" type="email" autocomplete="email" placeholder="you@example.com" required></div>
           ${selectedRole === "Staff" ? `
-            ${realtimeEnabled ? `<div class="field"><label for="staff-password">Firebase password</label><input id="staff-password" name="staffPassword" type="password" autocomplete="current-password" placeholder="Enter your staff account password" required></div>` : `<div class="field"><label for="school-id">Employee ID <span class="subtle">(optional)</span></label><input id="school-id" name="schoolId" autocomplete="off" inputmode="numeric" pattern="[0-9]{7}" maxlength="7" data-digit-limit="7" title="Employee ID must be exactly 7 digits" placeholder="7 digits"></div><div class="field"><label for="staff-code">Local demo staff code</label><input id="staff-code" name="staffCode" type="password" autocomplete="off" placeholder="Enter the local demo code" required><div class="staff-code-help">This code is not secure authentication and must not be used for a live queue.</div></div>`}
+            ${realtimeEnabled ? `<div class="field"><label for="staff-password">Password</label><input id="staff-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your staff account password" required></div>` : `<div class="field"><label for="school-id">Employee ID <span class="subtle">(optional)</span></label><input id="school-id" name="schoolId" autocomplete="off" inputmode="numeric" pattern="[0-9]{7}" maxlength="7" data-digit-limit="7" title="Employee ID must be exactly 7 digits" placeholder="7 digits"></div><div class="field"><label for="staff-code">Local demo staff code</label><input id="staff-code" name="staffCode" type="password" autocomplete="off" placeholder="Enter the local demo code" required><div class="staff-code-help">This code is not secure authentication and must not be used for a live queue.</div></div>`}
           ` : `
+            ${realtimeEnabled ? `<div class="field"><label for="customer-password">Password</label><input id="customer-password" name="password" type="password" autocomplete="${customerAuthMode === "create" ? "new-password" : "current-password"}" minlength="${customerAuthMode === "create" ? 6 : 1}" placeholder="${customerAuthMode === "create" ? "At least 6 characters" : "Enter your password"}" required></div>` : ""}
             ${!realtimeEnabled || customerAuthMode === "create" ? `
             <div class="field-grid">
               <div class="field"><label for="grade-level">${selectedRole === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="grade-level" name="grade" placeholder="${selectedRole === "Teacher" ? "e.g. Mathematics" : "e.g. Grade 10"}" required></div>
@@ -161,8 +158,8 @@ function renderLogin(selectedRole = "Student") {
             <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID" : "LRN"}</label><input id="school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${selectedRole === "Teacher" ? 7 : 12}}" maxlength="${selectedRole === "Teacher" ? 7 : 12}" data-digit-limit="${selectedRole === "Teacher" ? 7 : 12}" title="${selectedRole === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" placeholder="${selectedRole === "Teacher" ? "Enter 7-digit employee ID" : "Enter 12-digit LRN"}" required><div class="field-help">${selectedRole === "Teacher" ? "Enter exactly 7 digits." : "Enter exactly 12 digits."}</div></div>
             ` : ""}
           `}
-          <button class="primary" type="submit" ${realtimeSetupError ? "disabled" : ""}>${selectedRole === "Staff" ? "Sign in as Canteen Staff" : realtimeEnabled ? "Send SMS code" : `Continue as ${selectedRole}`}</button>
-          <div class="auth-notice">${realtimeSetupError ? "Firebase setup is unavailable. Correct the configuration or restore the Firebase SDK connection, then reload. Sign-in is disabled." : selectedRole === "Staff" ? realtimeEnabled ? "Staff sign in with their Firebase Email/Password account. Customer phone verification is not used for staff accounts." : "Local demo only: account information is not verified and is saved only in this browser on this device." : realtimeEnabled ? "A verification code is sent to the mobile number at sign-in. Firebase phone authentication and reCAPTCHA protect SMS delivery. Standard SMS charges or limits may apply." : "Local demo only: account information is not verified and is saved only in this browser on this device."}</div>
+          <button class="primary" type="submit" ${realtimeSetupError ? "disabled" : ""}>${selectedRole === "Staff" ? "Sign in as Canteen Staff" : realtimeEnabled ? customerAuthMode === "create" ? `Create ${selectedRole} Account` : "Sign in" : `Continue as ${selectedRole}`}</button>
+          <div class="auth-notice">${realtimeSetupError ? "Firebase setup is unavailable. Correct the configuration or restore the Firebase SDK connection, then reload. Sign-in is disabled." : realtimeEnabled ? selectedRole === "Staff" ? "Staff use their Firebase Email/Password account. Only staff accounts on the database allowlist can access staff tools." : "Customer accounts use Firebase Email/Password. Use an email address you can access and keep your password private." : "Local demo only: account information is not verified and is saved only in this browser on this device."}</div>
         </form>
       </section>
     </main>
@@ -185,53 +182,39 @@ function renderLogin(selectedRole = "Student") {
       return;
     }
     const form = new FormData(event.currentTarget);
-    if (role !== "Staff" && realtimeEnabled) {
-      const phoneNumber = String(form.get("phoneNumber") || "").trim();
-      if (!/^\+[1-9]\d{7,14}$/.test(phoneNumber)) {
-        toast("Enter a valid phone number in international format, such as +639171234567.");
-        return;
-      }
-      let registrationProfile = null;
-      if (customerAuthMode === "create") {
-        const schoolId = String(form.get("schoolId") || "").trim();
-        const requiredIdLength = role === "Student" ? 12 : 7;
-        if (!new RegExp(`^\\d{${requiredIdLength}}$`).test(schoolId)) {
-          toast(role === "Student" ? "LRN must contain exactly 12 digits." : "Employee ID must contain exactly 7 digits.");
-          return;
-        }
-        registrationProfile = {
-          name: String(form.get("name") || "").trim(),
-          grade: String(form.get("grade") || "").trim(),
-          section: String(form.get("section") || "").trim(),
-          schoolId,
-          role,
-          points: 0
-        };
-        if (!registrationProfile.name || !registrationProfile.grade || !registrationProfile.section) {
-          toast("Complete your name, grade or department, and section.");
-          return;
-        }
-      }
-      await requestCustomerSmsCode(phoneNumber, registrationProfile, role);
-      return;
-    }
     if (role === "Staff" && !realtimeEnabled && form.get("staffCode") !== STAFF_CODE) {
       toast("That staff code isn't correct.");
       return;
     }
     const email = String(form.get("email") || "").trim();
-    if (!/^[^@\s]+@gmail\.com$/i.test(email)) {
-      toast("Please use a Gmail address ending in @gmail.com.");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      toast("Enter a valid email address.");
       return;
     }
     const schoolId = String(form.get("schoolId") || "").trim();
     const requiredIdLength = role === "Student" ? 12 : role === "Teacher" ? 7 : 0;
-    if ((requiredIdLength && !new RegExp(`^\\d{${requiredIdLength}}$`).test(schoolId)) ||
+    const validateCustomerSchoolId = role !== "Staff" && (!realtimeEnabled || customerAuthMode === "create");
+    if ((requiredIdLength && validateCustomerSchoolId && !new RegExp(`^\\d{${requiredIdLength}}$`).test(schoolId)) ||
         (role === "Staff" && schoolId && !/^\d{7}$/.test(schoolId))) {
       toast(role === "Student" ? "LRN must contain exactly 12 digits." : "Employee ID must contain exactly 7 digits.");
       return;
     }
-    const name = String(form.get("name")).trim();
+    const name = String(form.get("name") || "").trim();
+    let customerDetails = null;
+    if (role !== "Staff" && customerAuthMode === "create") {
+      customerDetails = {
+        name,
+        grade: String(form.get("grade") || "").trim(),
+        section: String(form.get("section") || "").trim(),
+        schoolId,
+        role,
+        points: 0
+      };
+      if (!customerDetails.name || !customerDetails.grade || !customerDetails.section) {
+        toast("Complete your name, grade or department, and section.");
+        return;
+      }
+    }
     const roleKey = role.toLowerCase();
     const finishLocalSignIn = () => {
       let userId = `${roleKey}:${(schoolId || name).toLowerCase()}`;
@@ -255,89 +238,58 @@ function renderLogin(selectedRole = "Student") {
     }
 
     try {
-      const credential = await firebaseAuth.signInWithEmailAndPassword(email, String(form.get("staffPassword") || ""));
-      profile = { id: credential.user.uid, name, email, schoolId, role, points: 0 };
-      write(STORAGE.profile, profile);
-      connectOrderSync();
-      render();
+      const password = String(form.get("password") || "");
+      if (role !== "Staff" && customerAuthMode === "create") {
+        if (password.length < 6) {
+          toast("Password must contain at least 6 characters.");
+          return;
+        }
+        const credential = await firebaseAuth.createUserWithEmailAndPassword(email, password);
+        pendingCustomerUser = credential.user;
+        await saveCustomerProfile(credential.user, customerDetails);
+        return;
+      }
+      const credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
+      if (role === "Staff") {
+        profile = { id: credential.user.uid, name, email, schoolId, role, points: 0 };
+        write(STORAGE.profile, profile);
+        connectOrderSync();
+        render();
+        return;
+      }
+      const profileSnapshot = await ordersDatabase.ref("customerProfiles").child(credential.user.uid).once("value");
+      const savedProfile = profileSnapshot.val();
+      if (savedProfile) {
+        finishCustomerSignIn(credential.user, savedProfile);
+        return;
+      }
+      pendingCustomerUser = credential.user;
+      pendingCustomerRole = role;
+      renderCustomerProfileSetup(role);
     } catch (error) {
-      console.error("Staff Firebase sign-in failed.", error);
-      toast("Staff sign-in failed. Check the Firebase account and password.");
+      console.error(`${role} Firebase authentication failed.`, error);
+      toast(firebaseAuthErrorMessage(error, customerAuthMode === "create" && role !== "Staff"));
     }
     });
 }
 
-function clearPhoneRecaptcha() {
-  if (phoneRecaptchaVerifier) {
-    phoneRecaptchaVerifier.clear();
-    phoneRecaptchaVerifier = null;
-  }
-}
-
-function createPhoneRecaptcha() {
-  clearPhoneRecaptcha();
-  if (!document.getElementById("recaptcha-container")) {
-    throw new Error("The phone verification widget is unavailable. Reload and try again.");
-  }
-  phoneRecaptchaVerifier = new firebase.auth.RecaptchaVerifier("recaptcha-container", { size: "normal" });
-  return phoneRecaptchaVerifier;
-}
-
-async function requestCustomerSmsCode(phoneNumber, registrationProfile, role) {
-  const submitButton = document.querySelector("#login-form button[type='submit']");
-  if (submitButton) submitButton.disabled = true;
-  pendingPhoneNumber = phoneNumber;
-  pendingCustomerProfile = registrationProfile;
-  pendingCustomerRole = role;
-  try {
-    pendingPhoneConfirmation = await firebaseAuth.signInWithPhoneNumber(phoneNumber, createPhoneRecaptcha());
-    clearPhoneRecaptcha();
-    renderPhoneCodeEntry();
-  } catch (error) {
-    console.error("Unable to send customer sign-in SMS.", error);
-    clearPhoneRecaptcha();
-    if (submitButton) submitButton.disabled = false;
-    toast(error.message || "Firebase could not send the SMS code. Check Phone sign-in settings and try again.");
-  }
-}
-
-function renderPhoneCodeEntry() {
-  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">SMS sign-in</div><h1>Check your phone.</h1><p class="subtle">Enter the code sent to ${escapeHTML(pendingPhoneNumber)}. This code signs you in to CampuSnack.</p></div><div class="auth-illustration" aria-hidden="true">📱</div></section><section class="auth-form-wrap"><form class="auth-form" id="phone-code-form"><div class="eyebrow">Phone verification</div><h2>Enter your SMS code</h2><p class="subtle">Firebase sends a code each time you sign in. Standard SMS charges or limits may apply.</p><div class="field"><label for="phone-code">6-digit verification code</label><input id="phone-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></div><button class="primary" type="submit">Verify and continue</button><button class="secondary" id="use-different-phone" type="button" style="margin-top:10px">Use a different phone number</button></form></section></main><div id="modal-root"></div>`;
-  document.getElementById("phone-code-form").addEventListener("submit", verifyCustomerSmsCode);
-  document.getElementById("use-different-phone").addEventListener("click", () => {
-    pendingPhoneConfirmation = null;
-    pendingCustomerProfile = null;
-    customerAuthMode = "signin";
-    renderLogin(pendingCustomerRole);
-  });
-}
-
-async function verifyCustomerSmsCode(event) {
-  event.preventDefault();
-  const submitButton = event.currentTarget.querySelector("button[type='submit']");
-  if (submitButton) submitButton.disabled = true;
-  try {
-    const result = await pendingPhoneConfirmation.confirm(document.getElementById("phone-code").value.trim());
-    pendingPhoneUser = result.user;
-    const profileSnapshot = await ordersDatabase.ref("customerProfiles").child(result.user.uid).once("value");
-    const savedProfile = profileSnapshot.val();
-    if (savedProfile) {
-      finishCustomerSignIn(result.user, savedProfile);
-    } else if (pendingCustomerProfile) {
-      await saveCustomerProfile(result.user, pendingCustomerProfile);
-    } else {
-      renderCustomerProfileSetup(pendingCustomerRole);
-    }
-  } catch (error) {
-    console.error("Unable to verify customer SMS or load profile.", error);
-    if (submitButton) submitButton.disabled = false;
-    toast(error.message || "That code could not be verified. Check it and try again.");
+function firebaseAuthErrorMessage(error, isCreateAccount) {
+  switch (error.code) {
+    case "auth/email-already-in-use": return "An account already uses this email. Choose Sign in instead.";
+    case "auth/invalid-email": return "Enter a valid email address.";
+    case "auth/weak-password": return "Choose a stronger password with at least 6 characters.";
+    case "auth/invalid-credential":
+    case "auth/wrong-password":
+    case "auth/user-not-found": return "Email or password is incorrect. Check your details or create an account.";
+    case "auth/too-many-requests": return "Too many attempts. Wait a while before trying again.";
+    case "auth/operation-not-allowed": return "Email/Password sign-in is disabled. Enable it in Firebase Authentication settings.";
+    default: return error.message || (isCreateAccount ? "Could not create the account." : "Could not sign in.");
   }
 }
 
 function renderCustomerProfileSetup(role = "Student") {
   pendingCustomerRole = role;
-  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Complete your account</div><h1>Welcome to CampuSnack.</h1><p class="subtle">Your phone is verified. Add your school details to finish setting up your account.</p></div><div class="auth-illustration" aria-hidden="true">🍱</div></section><section class="auth-form-wrap"><form class="auth-form" id="customer-profile-form"><div class="eyebrow">School profile</div><h2>About you</h2><div class="role-switch auth-mode-switch" aria-label="Choose account type"><button type="button" class="${role === "Student" ? "active" : ""}" data-profile-role="Student">Student</button><button type="button" class="${role === "Teacher" ? "active" : ""}" data-profile-role="Teacher">Teacher</button></div><div class="field"><label for="profile-name">Full name</label><input id="profile-name" name="name" autocomplete="name" required></div><div class="field-grid"><div class="field"><label for="profile-grade">${role === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="profile-grade" name="grade" required></div><div class="field"><label for="profile-section">Section</label><input id="profile-section" name="section" required></div></div><div class="field"><label for="profile-school-id">${role === "Teacher" ? "Employee ID" : "LRN"}</label><input id="profile-school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${role === "Teacher" ? 7 : 12}}" maxlength="${role === "Teacher" ? 7 : 12}" data-profile-digit-limit="${role === "Teacher" ? 7 : 12}" title="${role === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" required><div class="field-help">Enter exactly ${role === "Teacher" ? 7 : 12} digits.</div></div><button class="primary" type="submit">Save profile and continue</button></form></section></main><div id="modal-root"></div>`;
+  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Complete your account</div><h1>Welcome to CampuSnack.</h1><p class="subtle">Your email account is ready. Add your school details to finish setting up your account.</p></div><div class="auth-illustration" aria-hidden="true">🍱</div></section><section class="auth-form-wrap"><form class="auth-form" id="customer-profile-form"><div class="eyebrow">School profile</div><h2>About you</h2><div class="role-switch auth-mode-switch" aria-label="Choose account type"><button type="button" class="${role === "Student" ? "active" : ""}" data-profile-role="Student">Student</button><button type="button" class="${role === "Teacher" ? "active" : ""}" data-profile-role="Teacher">Teacher</button></div><div class="field"><label for="profile-name">Full name</label><input id="profile-name" name="name" autocomplete="name" required></div><div class="field-grid"><div class="field"><label for="profile-grade">${role === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="profile-grade" name="grade" required></div><div class="field"><label for="profile-section">Section</label><input id="profile-section" name="section" required></div></div><div class="field"><label for="profile-school-id">${role === "Teacher" ? "Employee ID" : "LRN"}</label><input id="profile-school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${role === "Teacher" ? 7 : 12}}" maxlength="${role === "Teacher" ? 7 : 12}" data-profile-digit-limit="${role === "Teacher" ? 7 : 12}" title="${role === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" required><div class="field-help">Enter exactly ${role === "Teacher" ? 7 : 12} digits.</div></div><button class="primary" type="submit">Save profile and continue</button></form></section></main><div id="modal-root"></div>`;
   document.querySelectorAll("[data-profile-role]").forEach(button => button.addEventListener("click", () => renderCustomerProfileSetup(button.dataset.profileRole)));
   document.querySelector("[data-profile-digit-limit]")?.addEventListener("input", event => {
     const input = event.currentTarget;
@@ -352,7 +304,7 @@ function renderCustomerProfileSetup(role = "Student") {
       toast(pendingCustomerRole === "Student" ? "LRN must contain exactly 12 digits." : "Employee ID must contain exactly 7 digits.");
       return;
     }
-    await saveCustomerProfile(pendingPhoneUser, {
+    await saveCustomerProfile(pendingCustomerUser, {
       name: String(data.get("name") || "").trim(),
       grade: String(data.get("grade") || "").trim(),
       section: String(data.get("section") || "").trim(),
@@ -365,31 +317,28 @@ function renderCustomerProfileSetup(role = "Student") {
 
 async function saveCustomerProfile(user, customerProfile) {
   if (!user) {
-    toast("Your verified phone session expired. Sign in again.");
+    toast("Your signed-in session expired. Sign in again.");
     renderLogin();
     return;
   }
   const savedProfile = {
     ...customerProfile,
     id: user.uid,
-    phoneNumber: user.phoneNumber || pendingPhoneNumber,
+    email: user.email,
     updatedAt: Date.now()
   };
   try {
     await ordersDatabase.ref("customerProfiles").child(user.uid).set(savedProfile);
     finishCustomerSignIn(user, savedProfile);
   } catch (error) {
-    console.error("Unable to save the verified customer's school profile.", error);
-    toast("Your phone is verified, but your profile could not be saved. Check Firebase database rules and try again.");
+    console.error("Unable to save the signed-in customer's school profile.", error);
+    toast("Your account is signed in, but the school profile could not be saved. Check Firebase database rules and try again.");
   }
 }
 
 function finishCustomerSignIn(user, savedProfile) {
   profile = { ...savedProfile, id: user.uid };
-  pendingCustomerProfile = null;
-  pendingPhoneConfirmation = null;
-  pendingPhoneNumber = "";
-  pendingPhoneUser = null;
+  pendingCustomerUser = null;
   customerAuthMode = "signin";
   write(STORAGE.profile, profile);
   connectOrderSync();
@@ -1619,13 +1568,13 @@ async function startApp() {
       if (profile.role !== "Staff") {
         const role = profile.role;
         const token = user ? await user.getIdTokenResult() : null;
-        if (!user || user.isAnonymous || token?.signInProvider !== "phone") {
+        if (!user || user.isAnonymous || token?.signInProvider !== "password") {
           profile = null;
           localStorage.removeItem(STORAGE.profile);
           if (user) await firebaseAuth.signOut();
           customerAuthMode = "signin";
           renderLogin(role);
-          toast("Student and teacher accounts now sign in with a verified phone number. Enter your number to receive an SMS code.");
+          toast("Student and teacher accounts now use email and password. Sign in with an Email/Password account.");
           return;
         }
         const savedProfileSnapshot = await ordersDatabase.ref("customerProfiles").child(user.uid).once("value");
@@ -1633,7 +1582,7 @@ async function startApp() {
         if (!savedProfile) {
           profile = null;
           localStorage.removeItem(STORAGE.profile);
-          pendingPhoneUser = user;
+          pendingCustomerUser = user;
           renderCustomerProfileSetup(role);
           return;
         }
