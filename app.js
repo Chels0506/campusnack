@@ -246,7 +246,16 @@ function renderLogin(selectedRole = "Student") {
         }
         const credential = await firebaseAuth.createUserWithEmailAndPassword(email, password);
         pendingCustomerUser = credential.user;
-        await saveCustomerProfile(credential.user, customerDetails);
+        const saved = await saveCustomerProfile(credential.user, customerDetails);
+        if (!saved) {
+          try {
+            await credential.user.delete();
+            await firebaseAuth.signOut();
+          } catch (error) {
+            console.error("Unable to remove a customer account after registration failed.", error);
+            toast("The account was created but registration did not finish. Sign in with this email to complete your profile.");
+          }
+        }
         return;
       }
       const credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
@@ -319,7 +328,7 @@ async function saveCustomerProfile(user, customerProfile) {
   if (!user) {
     toast("Your signed-in session expired. Sign in again.");
     renderLogin();
-    return;
+    return false;
   }
   const savedProfile = {
     ...customerProfile,
@@ -327,12 +336,42 @@ async function saveCustomerProfile(user, customerProfile) {
     email: user.email,
     updatedAt: Date.now()
   };
+  let schoolIdClaimed = false;
+  const schoolIdClaimPath = savedProfile.role === "Student" ? "studentLrnClaims" : "teacherEmployeeIdClaims";
+  const schoolIdLabel = savedProfile.role === "Student" ? "LRN" : "employee ID";
   try {
+    if (savedProfile.role === "Student" || savedProfile.role === "Teacher") {
+      const claimResult = await ordersDatabase.ref(schoolIdClaimPath).child(savedProfile.schoolId).transaction(
+        currentOwner => currentOwner === null || currentOwner === user.uid ? user.uid : undefined,
+        undefined,
+        false
+      );
+      if (!claimResult.committed || claimResult.snapshot.val() !== user.uid) {
+        toast(`This ${schoolIdLabel} is already linked to another account. Each ${schoolIdLabel} can be used only once.`);
+        return false;
+      }
+      schoolIdClaimed = true;
+    }
     await ordersDatabase.ref("customerProfiles").child(user.uid).set(savedProfile);
     finishCustomerSignIn(user, savedProfile);
+    return true;
   } catch (error) {
     console.error("Unable to save the signed-in customer's school profile.", error);
-    toast("Your account is signed in, but the school profile could not be saved. Check Firebase database rules and try again.");
+    if (schoolIdClaimed) {
+      try {
+        await ordersDatabase.ref(schoolIdClaimPath).child(savedProfile.schoolId).transaction(
+          currentOwner => currentOwner === user.uid ? null : currentOwner,
+          undefined,
+          false
+        );
+      } catch (rollbackError) {
+        console.error("Unable to release the LRN reservation after profile save failed.", rollbackError);
+      }
+    }
+    toast(error.code === "PERMISSION_DENIED" || error.code === "permission_denied"
+      ? `Could not reserve this ${schoolIdLabel}. It may already be in use, or the latest Firebase rules may not be published.`
+      : "Your account is signed in, but the school profile could not be saved. Check Firebase database rules and try again.");
+    return false;
   }
 }
 
@@ -488,7 +527,7 @@ function customerMenuContent() {
 function foodCard(item) {
   return `<article class="food-card">
     <div class="food-art">${item.image ? `<img src="${escapeHTML(item.image)}" alt="${escapeHTML(item.name)}">` : `<span>${escapeHTML(item.emoji)}</span>`}${item.tag ? `<span class="tag">${escapeHTML(item.tag)}</span>` : ""}<button class="like ${likes.has(item.id) ? "liked" : ""}" data-like="${escapeHTML(item.id)}" aria-label="${likes.has(item.id) ? "Unlike" : "Like"} ${escapeHTML(item.name)}">${likes.has(item.id) ? "♥" : "♡"}</button></div>
-    <div class="food-info"><h3>${escapeHTML(item.name)}</h3><p class="description">${escapeHTML(item.description)}</p><div class="food-bottom"><div><span class="price">${money(item.price)}</span><span class="food-points">✦ ${item.points} points</span></div><button class="add-btn" data-add="${escapeHTML(item.id)}" aria-label="Add ${escapeHTML(item.name)} to cart" ${item.stock < 1 ? "disabled" : ""}>${item.stock < 1 ? "−" : "+"}</button></div></div>
+    <div class="food-info"><h3>${escapeHTML(item.name)}</h3><p class="description">${escapeHTML(item.description)}</p><div class="food-bottom"><div><span class="price">${money(item.price)}</span><span class="food-points">✦ ${item.points} points</span></div><button class="add-btn" data-add="${escapeHTML(item.id)}" aria-label="${item.stock < 1 ? `${escapeHTML(item.name)} is sold out` : `Add ${escapeHTML(item.name)} to cart`}" ${item.stock < 1 ? "disabled" : ""}>${item.stock < 1 ? "Sold out" : "+ Add"}</button></div></div>
   </article>`;
 }
 
