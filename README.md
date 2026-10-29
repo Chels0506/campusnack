@@ -61,6 +61,7 @@ The included rules are a starting point for this demo. The app does not validate
 - Earn campus points, redeem points as a wallet discount, view rewards, order history, and a simple student or teacher profile.
 - Switch to Staff view to see weekly/monthly sales and top product demand, manage shared stock and menu items, and advance orders through received, preparing, ready, and completed.
 - Keep menu edits and stock levels synchronized across signed-in devices through Firebase Realtime Database.
+- In the staff **Menu** tab, slide an item's delete control fully and confirm to remove it from the shared menu and stock tracker. Existing orders remain unchanged.
 - Share the app link or its QR code from the **Share app** dialog. Share the QR image through the device share sheet when supported, or download it as a PNG.
 - The app QR always points to `https://chels0506.github.io/campusnack/`. After publishing new files to that same URL, existing QR codes open the latest deployed version; app changes still need to be published to the hosting provider.
 - Save menu, profile, cart, and other local demo data in this browser.

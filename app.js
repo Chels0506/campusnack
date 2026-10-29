@@ -1222,6 +1222,33 @@ function renderStaff() {
   }));
   document.getElementById("add-menu-item")?.addEventListener("click", () => openMenuEditor());
   document.querySelectorAll("[data-edit-menu]").forEach(button => button.addEventListener("click", () => openMenuEditor(button.dataset.editMenu)));
+  document.querySelectorAll("[data-delete-menu]").forEach(slider => slider.addEventListener("input", async () => {
+    if (Number(slider.value) < 100 || slider.dataset.deleting === "true") return;
+    slider.dataset.deleting = "true";
+    slider.disabled = true;
+    const item = menu.find(food => food.id === slider.dataset.deleteMenu);
+    if (!item) {
+      renderStaff();
+      return;
+    }
+    if (!window.confirm(`Permanently delete "${item.name}" from the menu and stock tracker? Existing orders will remain unchanged.`)) {
+      renderStaff();
+      return;
+    }
+    try {
+      if (realtimeEnabled) {
+        await ordersDatabase.ref("menu").child(item.id).remove();
+      }
+      menu = menu.filter(food => food.id !== item.id);
+      write(STORAGE.menu, menu);
+      renderStaff();
+      toast(`${item.name} deleted from the menu.`);
+    } catch (error) {
+      console.error(`Unable to delete menu item ${item.id}.`, error);
+      renderStaff();
+      toast(`Could not delete ${item.name}. Check staff access and your connection.`);
+    }
+  }));
   bindModalClose();
 }
 
@@ -1423,7 +1450,7 @@ function staffStockContent() {
 }
 
 function staffMenuContent() {
-  return `<div class="section-heading" style="margin-top:0"><div><h2>Live menu editor</h2><p class="subtle" style="margin:5px 0 0">${realtimeEnabled ? "Changes publish to all signed-in devices immediately." : "Changes are saved on this device only."}</p></div><button id="add-menu-item" class="primary" style="width:auto">＋ Add item</button></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji">${escapeHTML(item.emoji)}</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="subtle" style="font-size:11px;margin-top:3px">${escapeHTML(item.category)} · ${money(item.price)} · ${item.stock} in stock</div></div></div><button class="secondary" data-edit-menu="${escapeHTML(item.id)}">Edit</button></div>`).join("")}`;
+  return `<div class="section-heading" style="margin-top:0"><div><h2>Live menu editor</h2><p class="subtle" style="margin:5px 0 0">${realtimeEnabled ? "Changes publish to all signed-in devices immediately." : "Changes are saved on this device only."}</p></div><button id="add-menu-item" class="primary" style="width:auto">＋ Add item</button></div>${menu.length ? menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji">${escapeHTML(item.emoji)}</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="subtle" style="font-size:11px;margin-top:3px">${escapeHTML(item.category)} · ${money(item.price)} · ${item.stock} in stock</div></div></div><div class="staff-menu-actions"><button class="secondary" data-edit-menu="${escapeHTML(item.id)}">Edit</button><label class="delete-slider-label" for="delete-menu-${escapeHTML(item.id)}">Slide fully to delete</label><input id="delete-menu-${escapeHTML(item.id)}" class="delete-menu-slider" data-delete-menu="${escapeHTML(item.id)}" type="range" min="0" max="100" value="0" aria-label="Slide fully to delete ${escapeHTML(item.name)}"></div></div>`).join("") : `<div class="empty-state"><div class="empty-icon">🍽️</div>No menu items yet. Add an item to publish it.</div>`}`;
 }
 
 function openMenuEditor(id = "") {

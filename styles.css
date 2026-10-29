@@ -148,6 +148,10 @@ h1 { font-size:34px; margin:7px 0 5px; }
 .order-list { display:grid; gap:12px; }
 .order-card { background:white; border:1px solid var(--line); padding:15px; border-radius:13px; }
 .order-card-top { display:flex; justify-content:space-between; gap:10px; }
+.staff-menu-actions { display:grid; grid-template-columns:auto; justify-items:center; gap:3px; flex:0 0 112px; }
+.delete-slider-label { color:#9c4137; font-size:9px; font-weight:800; white-space:nowrap; }
+.delete-menu-slider { width:104px; height:18px; margin:0; accent-color:#b84e41; cursor:ew-resize; }
+.delete-menu-slider:disabled { opacity:.55; cursor:wait; }
 .order-status { color:var(--green-2); background:#e9f2df; font-size:10px; padding:5px 9px; border-radius:20px; font-weight:800; }
 .order-progress { display:flex; gap:5px; margin-top:13px; }
 .order-progress span { height:4px; background:#e6e9df; border-radius:8px; flex:1; }
