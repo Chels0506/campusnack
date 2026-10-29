@@ -102,6 +102,11 @@ h1 { font-size:34px; margin:7px 0 5px; }
 .payment-upload-error { margin:9px 0; color:var(--red); font-size:12px; line-height:1.55; }
 .confirm-payment { width:auto; padding:8px 11px; white-space:nowrap; }
 .payment-review-note,.payment-confirmed-note { color:#8a6224; font-size:10px; line-height:1.5; margin:8px 0 0; }
+.payment-review-actions { display:flex; flex-wrap:wrap; gap:7px; min-width:205px; }
+.cancel-payment { color:#a54236; border-color:#eed7d2; }
+.cancel-payment:hover { background:#fff1ee; }
+.order-cancelled { color:#9c4137; background:#f9e8e4; }
+.auth-form #recaptcha-container { margin:12px 0 16px; min-height:0; }
 .payment-confirmed-note { color:#347c49; }
 .reward-card { background:#f3e9cf; border-radius:15px; padding:16px; display:flex; justify-content:space-between; align-items:center; }
 .reward-card h3 { font-size:13px; margin:0 0 5px; }
@@ -125,6 +130,7 @@ h1 { font-size:34px; margin:7px 0 5px; }
 .auth-form h2 { font-size:27px; margin:10px 0 7px; }
 .auth-form .subtle { margin-bottom:22px; }
 .role-switch { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; padding:5px; background:#f1f2eb; border-radius:12px; margin-bottom:18px; }
+.role-switch.auth-mode-switch { grid-template-columns:repeat(2,1fr); margin-top:-8px; }
 .role-switch button { background:transparent; color:#778078; border:0; padding:10px 5px; border-radius:9px; font-size:12px; font-weight:700; }
 .role-switch button.active { background:white; color:var(--green); box-shadow:0 2px 6px #20362910; }
 .field { margin:12px 0; }

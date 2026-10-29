@@ -6,6 +6,7 @@ const STORAGE = {
   gcashQr: "campusnack.gcashQr"
 };
 const STAFF_CODE = "EAPIHS2009";
+const APP_PUBLIC_URL = "https://chels0506.github.io/campusnack/";
 const firebaseConfig = window.CAMPUSNACK_FIREBASE_CONFIG || {};
 const statuses = ["Received", "Preparing", "Ready for pickup", "Completed"];
 const initialMenu = [
@@ -61,6 +62,14 @@ let realtimeEnabled = false;
 let realtimeSetupError = null;
 let realtimeStatus = "connecting";
 let salesPeriod = "week";
+let customerAuthMode = "signin";
+let pendingCustomerProfile = null;
+let pendingMfaUser = null;
+let pendingMfaResolver = null;
+let pendingMfaHint = null;
+let pendingMfaVerificationId = "";
+let pendingMfaPhoneNumber = "";
+let mfaRecaptchaVerifier = null;
 
 function setupRealtime() {
   const configValues = ["apiKey", "authDomain", "databaseURL", "projectId", "appId"];
@@ -132,13 +141,15 @@ function renderLogin(selectedRole = "Student") {
       <section class="auth-form-wrap">
         <form class="auth-form" id="login-form">
           <div class="eyebrow">Welcome to the canteen</div>
-          <h2>${selectedRole === "Staff" ? "Canteen staff sign in" : "Let's get you started"}</h2>
-          <p class="subtle">${selectedRole === "Staff" ? realtimeEnabled ? "Sign in with your Firebase staff account." : "Enter your name and local demo staff code to continue." : "Sign in with your school details to continue."}</p>
+          <h2>${selectedRole === "Staff" ? "Canteen staff sign in" : customerAuthMode === "create" && realtimeEnabled ? "Create a secure account" : "Let's get you started"}</h2>
+          <p class="subtle">${selectedRole === "Staff" ? realtimeEnabled ? "Sign in with your Firebase staff account." : "Enter your name and local demo staff code to continue." : realtimeEnabled ? "Student and teacher accounts use a password and SMS verification." : "Sign in with your school details to continue."}</p>
           <div class="role-switch" aria-label="Choose account type">
             ${["Student", "Teacher", "Staff"].map(role => `<button type="button" class="${role === selectedRole ? "active" : ""}" data-role="${role}">${role}</button>`).join("")}
           </div>
+          ${selectedRole !== "Staff" && realtimeEnabled ? `<div class="role-switch auth-mode-switch" aria-label="Choose sign-in mode"><button type="button" class="${customerAuthMode === "signin" ? "active" : ""}" data-auth-mode="signin">Sign in</button><button type="button" class="${customerAuthMode === "create" ? "active" : ""}" data-auth-mode="create">Create account</button></div>` : ""}
           <div class="field"><label for="full-name">Full name</label><input id="full-name" name="name" autocomplete="name" placeholder="e.g. Alex Santos" required></div>
           <div class="field"><label for="gmail-address">Gmail address</label><input id="gmail-address" name="email" type="email" autocomplete="email" placeholder="you@gmail.com" required pattern="^[^@\\s]+@gmail\\.com$" title="Use a Gmail address ending in @gmail.com"></div>
+          ${selectedRole !== "Staff" && realtimeEnabled ? `<div class="field"><label for="customer-password">Password</label><input id="customer-password" name="customerPassword" type="password" autocomplete="${customerAuthMode === "create" ? "new-password" : "current-password"}" minlength="8" placeholder="${customerAuthMode === "create" ? "Create at least 8 characters" : "Enter your password"}" required></div>` : ""}
           ${selectedRole === "Staff" ? `
             ${realtimeEnabled ? `<div class="field"><label for="staff-password">Firebase password</label><input id="staff-password" name="staffPassword" type="password" autocomplete="current-password" placeholder="Enter your staff account password" required></div>` : `<div class="field"><label for="school-id">Employee ID <span class="subtle">(optional)</span></label><input id="school-id" name="schoolId" autocomplete="off" placeholder="Enter employee ID if you have one"></div><div class="field"><label for="staff-code">Local demo staff code</label><input id="staff-code" name="staffCode" type="password" autocomplete="off" placeholder="Enter the local demo code" required><div class="staff-code-help">This code is not secure authentication and must not be used for a live queue.</div></div>`}
           ` : `
@@ -149,16 +160,20 @@ function renderLogin(selectedRole = "Student") {
             <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID" : "LRN"}</label><input id="school-id" name="schoolId" placeholder="${selectedRole === "Teacher" ? "Enter employee ID" : "Enter learner reference number"}" required></div>
           `}
           <button class="primary" type="submit" ${realtimeSetupError ? "disabled" : ""}>${selectedRole === "Staff" ? "Sign in as Canteen Staff" : `Continue as ${selectedRole}`}</button>
-          <div class="auth-notice">${realtimeSetupError ? "Firebase setup is unavailable. Correct the configuration or restore the Firebase SDK connection, then reload. Sign-in is disabled." : realtimeEnabled ? "Student and teacher sessions use Firebase anonymous authentication. Staff sign-in requires an Email/Password Firebase account whose UID is allowlisted in the Realtime Database rules." : "Use a Gmail address ending in @gmail.com. This local demo checks the address format only; it does not verify your Google account. Information is saved only in this browser on this device."}</div>
+          <div class="auth-notice">${realtimeSetupError ? "Firebase setup is unavailable. Correct the configuration or restore the Firebase SDK connection, then reload. Sign-in is disabled." : realtimeEnabled ? "Student and teacher sign-in requires an account password and SMS verification. New accounts must register a phone factor before using the app. Staff use their Firebase Email/Password account." : "Use a Gmail address ending in @gmail.com. This local demo checks the address format only; it does not verify your Google account. Information is saved only in this browser on this device."}</div>
         </form>
       </section>
     </main>
     <div id="modal-root"></div>`;
     let role = selectedRole;
     document.querySelectorAll("[data-role]").forEach(button => button.addEventListener("click", () => renderLogin(button.dataset.role)));
+    document.querySelectorAll("[data-auth-mode]").forEach(button => button.addEventListener("click", () => {
+      customerAuthMode = button.dataset.authMode;
+      renderLogin(role);
+    }));
     bindShareApp();
     bindInstallApp();
-    document.getElementById("login-form").addEventListener("submit", event => {
+    document.getElementById("login-form").addEventListener("submit", async event => {
     event.preventDefault();
     if (realtimeSetupError) {
       toast("Firebase setup is unavailable. Sign-in is disabled until it is fixed.");
@@ -177,22 +192,28 @@ function renderLogin(selectedRole = "Student") {
     const schoolId = String(form.get("schoolId") || "").trim();
     const name = String(form.get("name")).trim();
     const roleKey = role.toLowerCase();
-    const completeSignIn = async () => {
+    const finishLocalSignIn = () => {
       let userId = `${roleKey}:${(schoolId || name).toLowerCase()}`;
-      if (realtimeEnabled) {
-        try {
-          const credential = role === "Staff"
-            ? await firebaseAuth.signInWithEmailAndPassword(email, String(form.get("staffPassword") || ""))
-            : await firebaseAuth.signInAnonymously();
-          userId = credential.user.uid;
-        } catch (error) {
-          console.error("Firebase sign-in failed.", error);
-          toast(role === "Staff" ? "Staff sign-in failed. Check the Firebase account and password." : "Could not connect to the shared order service. Please try again.");
-          return;
-        }
-      }
       profile = {
-      id: userId,
+        id: userId,
+        name,
+        email,
+        grade: String(form.get("grade") || "").trim(),
+        section: String(form.get("section") || "").trim(),
+        schoolId,
+        role,
+        points: 0
+      };
+      write(STORAGE.profile, profile);
+      connectOrderSync();
+      render();
+    };
+    if (!realtimeEnabled) {
+      finishLocalSignIn();
+      return;
+    }
+
+    const customerProfile = {
       name,
       email,
       grade: String(form.get("grade") || "").trim(),
@@ -200,13 +221,195 @@ function renderLogin(selectedRole = "Student") {
       schoolId,
       role,
       points: 0
-      };
+    };
+    if (role !== "Staff") {
+      pendingCustomerProfile = customerProfile;
+      const password = String(form.get("customerPassword") || "");
+      if (password.length < 8) {
+        toast("Create a password with at least 8 characters.");
+        return;
+      }
+      try {
+        let credential;
+        if (customerAuthMode === "create") {
+          credential = await firebaseAuth.createUserWithEmailAndPassword(email, password);
+        } else {
+          try {
+            credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
+          } catch (error) {
+            if (error.code !== "auth/multi-factor-auth-required") throw error;
+            pendingMfaResolver = error.resolver;
+            if (!pendingMfaResolver) throw new Error("Firebase did not provide the multi-factor sign-in challenge.");
+            pendingMfaHint = pendingMfaResolver.hints[0];
+            if (!pendingMfaHint) throw new Error("No SMS verification method is registered for this account.");
+            renderMfaChallenge();
+            return;
+          }
+        }
+        pendingMfaUser = credential.user;
+        if (!credential.user.multiFactor.enrolledFactors.length) {
+          renderMfaEnrollment();
+          return;
+        }
+        finishCustomerSignIn(credential.user);
+      } catch (error) {
+        console.error("Student/teacher Firebase sign-in failed.", error);
+        const message = error.code === "auth/email-already-in-use"
+          ? "An account already uses this email. Choose Sign in and enter its password."
+          : error.code === "auth/weak-password"
+            ? "Choose a stronger password with at least 8 characters."
+            : error.code === "auth/invalid-credential" || error.code === "auth/wrong-password"
+              ? "That email or password is not correct."
+              : error.message || "Could not sign in. Check your connection and Firebase settings.";
+        toast(message);
+      }
+      return;
+    }
+
+    try {
+      const credential = await firebaseAuth.signInWithEmailAndPassword(email, String(form.get("staffPassword") || ""));
+      profile = { ...customerProfile, id: credential.user.uid };
       write(STORAGE.profile, profile);
       connectOrderSync();
       render();
-    };
-    completeSignIn();
+    } catch (error) {
+      console.error("Staff Firebase sign-in failed.", error);
+      toast("Staff sign-in failed. Check the Firebase account and password.");
+    }
+    });
+}
+
+function clearMfaRecaptcha() {
+  if (mfaRecaptchaVerifier) {
+    mfaRecaptchaVerifier.clear();
+    mfaRecaptchaVerifier = null;
+  }
+}
+
+function createMfaRecaptcha() {
+  clearMfaRecaptcha();
+  const container = document.getElementById("recaptcha-container");
+  if (!container) throw new Error("The verification widget is unavailable. Reload the page and try again.");
+  mfaRecaptchaVerifier = new firebase.auth.RecaptchaVerifier("recaptcha-container", {
+    size: "normal"
   });
+  return mfaRecaptchaVerifier;
+}
+
+function renderMfaEnrollment() {
+  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Secure account setup</div><h1>One more step.</h1><p class="subtle">Register a phone number so Firebase can verify your sign-in with SMS.</p></div><div class="auth-illustration" aria-hidden="true">🔐</div></section><section class="auth-form-wrap"><form class="auth-form" id="mfa-enrollment-form"><div class="eyebrow">SMS verification setup</div><h2>Verify your phone</h2><p class="subtle">Enter a phone number in international format, for example +639171234567. Firebase will text a code. Standard SMS charges may apply.</p><div class="field"><label for="mfa-phone">Phone number</label><input id="mfa-phone" type="tel" autocomplete="tel" placeholder="+639171234567" pattern="\\+[1-9][0-9]{7,14}" required></div><div id="recaptcha-container"></div><button class="primary" id="send-mfa-code" type="submit">Send verification code</button></form></section></main><div id="modal-root"></div>`;
+  document.getElementById("mfa-enrollment-form").addEventListener("submit", sendMfaEnrollmentCode);
+}
+
+function renderMfaChallenge() {
+  const phone = pendingMfaHint?.phoneNumber || "your registered phone";
+  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Account verification</div><h1>Check your phone.</h1><p class="subtle">A sign-in code will be sent to ${escapeHTML(phone)}.</p></div><div class="auth-illustration" aria-hidden="true">📱</div></section><section class="auth-form-wrap"><form class="auth-form" id="mfa-challenge-form"><div class="eyebrow">Second step</div><h2>Enter your SMS code</h2><p class="subtle">Firebase will text the registered phone. Standard SMS charges may apply.</p><div id="recaptcha-container"></div><button class="primary" id="send-mfa-code" type="button">Send verification code</button><div class="field"><label for="mfa-code">6-digit verification code</label><input id="mfa-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></div><button class="primary" id="verify-mfa-code" type="submit" disabled>Verify and sign in</button></form></section></main><div id="modal-root"></div>`;
+  document.getElementById("send-mfa-code").addEventListener("click", sendMfaChallengeCode);
+  document.getElementById("mfa-challenge-form").addEventListener("submit", verifyMfaChallengeCode);
+}
+
+async function sendMfaEnrollmentCode(event) {
+  event.preventDefault();
+  const phoneNumber = document.getElementById("mfa-phone").value.trim();
+  if (!/^\+[1-9]\d{7,14}$/.test(phoneNumber)) {
+    toast("Enter a valid phone number in international format, such as +639171234567.");
+    return;
+  }
+  const button = document.getElementById("send-mfa-code");
+  button.disabled = true;
+  try {
+    const verifier = createMfaRecaptcha();
+    const session = await pendingMfaUser.multiFactor.getSession();
+    const provider = new firebase.auth.PhoneAuthProvider(firebaseAuth);
+    pendingMfaVerificationId = await provider.verifyPhoneNumber({ phoneNumber, session }, verifier);
+    pendingMfaPhoneNumber = phoneNumber;
+    document.getElementById("mfa-enrollment-form").innerHTML = `<div class="eyebrow">SMS verification setup</div><h2>Enter your verification code</h2><p class="subtle">We sent a code to ${escapeHTML(phoneNumber)}. Enter it below to finish securing your account.</p><div class="field"><label for="mfa-code">6-digit verification code</label><input id="mfa-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></div><button class="primary" type="submit">Verify phone and continue</button><button class="secondary" id="resend-mfa-code" type="button" style="margin-top:10px">Send another code</button>`;
+    document.getElementById("mfa-enrollment-form").addEventListener("submit", verifyMfaEnrollmentCode);
+    document.getElementById("resend-mfa-code").addEventListener("click", () => {
+      renderMfaEnrollment();
+      document.getElementById("mfa-phone").value = pendingMfaPhoneNumber;
+      document.getElementById("mfa-enrollment-form").requestSubmit();
+    });
+  } catch (error) {
+    console.error("Unable to send SMS enrollment code.", error);
+    clearMfaRecaptcha();
+    button.disabled = false;
+    toast(error.message || "Firebase could not send the SMS code. Check phone authentication and Identity Platform settings.");
+  }
+}
+
+async function verifyMfaEnrollmentCode(event) {
+  event.preventDefault();
+  const code = document.getElementById("mfa-code").value.trim();
+  try {
+    const credential = firebase.auth.PhoneAuthProvider.credential(pendingMfaVerificationId, code);
+    const assertion = firebase.auth.PhoneMultiFactorGenerator.assertion(credential);
+    await pendingMfaUser.multiFactor.enroll(assertion, "CampuSnack SMS");
+    clearMfaRecaptcha();
+    finishCustomerSignIn(pendingMfaUser);
+  } catch (error) {
+    console.error("Unable to verify the phone for MFA enrollment.", error);
+    toast(error.message || "The code could not be verified. Check it and try again.");
+  }
+}
+
+async function sendMfaChallengeCode() {
+  const button = document.getElementById("send-mfa-code");
+  button.disabled = true;
+  try {
+    const verifier = createMfaRecaptcha();
+    const provider = new firebase.auth.PhoneAuthProvider(firebaseAuth);
+    pendingMfaVerificationId = await provider.verifyPhoneNumber({
+      multiFactorHint: pendingMfaHint,
+      session: pendingMfaResolver.session
+    }, verifier);
+    const codeInput = document.getElementById("mfa-code");
+    codeInput.disabled = false;
+    document.getElementById("verify-mfa-code").disabled = false;
+    codeInput.focus();
+    toast("Verification code sent.");
+  } catch (error) {
+    console.error("Unable to send SMS sign-in code.", error);
+    clearMfaRecaptcha();
+    button.disabled = false;
+    toast(error.message || "Firebase could not send the SMS code. Check Identity Platform settings.");
+  }
+}
+
+async function verifyMfaChallengeCode(event) {
+  event.preventDefault();
+  try {
+    const credential = firebase.auth.PhoneAuthProvider.credential(
+      pendingMfaVerificationId,
+      document.getElementById("mfa-code").value.trim()
+    );
+    const assertion = firebase.auth.PhoneMultiFactorGenerator.assertion(credential);
+    const result = await pendingMfaResolver.resolveSignIn(assertion);
+    clearMfaRecaptcha();
+    finishCustomerSignIn(result.user);
+  } catch (error) {
+    console.error("Unable to complete SMS multi-factor sign-in.", error);
+    toast(error.message || "That code could not be verified. Check it and try again.");
+  }
+}
+
+function finishCustomerSignIn(user) {
+  if (!pendingCustomerProfile) {
+    toast("Your profile details are missing. Please sign in again.");
+    renderLogin();
+    return;
+  }
+  profile = { ...pendingCustomerProfile, id: user.uid, email: user.email || pendingCustomerProfile.email };
+  pendingCustomerProfile = null;
+  pendingMfaUser = null;
+  pendingMfaResolver = null;
+  pendingMfaHint = null;
+  pendingMfaVerificationId = "";
+  pendingMfaPhoneNumber = "";
+  customerAuthMode = "signin";
+  write(STORAGE.profile, profile);
+  connectOrderSync();
+  render();
 }
 
 function connectOrderSync() {
@@ -382,7 +585,7 @@ function customerOrdersContent() {
   const list = customerOrders();
   return `<nav class="bottom-nav">${["Menu", "Orders", "Profile"].map(tab => `<button class="nav-tab ${customerTab === tab ? "active" : ""}" data-customer-tab="${tab}">${tab}</button>`).join("")}</nav>
     <div class="section-heading"><div><div class="eyebrow">Your canteen activity</div><h2>Order history</h2></div></div>
-    ${list.length ? `<div class="order-list">${list.map(order => `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(order.id)}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status">${escapeHTML(order.status)}</span></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">GCash transfer reported · awaiting staff verification</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">GCash payment confirmed by staff</p>` : ""}<div style="font-size:12px;color:#657168">${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${order.points} pts</strong><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button></div><div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div></article>`).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
+    ${list.length ? `<div class="order-list">${list.map(order => `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(order.id)}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status ${order.status === "Cancelled" ? "order-cancelled" : ""}">${escapeHTML(order.status)}</span></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">GCash transfer reported · awaiting staff verification</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">GCash payment confirmed by staff</p>` : order.paymentStatus === "not_received" ? `<p class="payment-review-note">Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "The order was cancelled and stock returned." : order.stockRestorationStatus === "manual_review" ? "The order was cancelled; staff is correcting stock." : "The order was cancelled and stock is being restored."}</p>` : ""}<div style="font-size:12px;color:#657168">${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${order.points} pts</strong><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button></div>${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}</article>`).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
 }
 
 function profileContent() {
@@ -508,7 +711,7 @@ async function checkout() {
 function openTracker(orderId) {
   const order = customerOrders().find(item => item.id === orderId);
   if (!order) return;
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="tracker-title"><div class="modal-head">  <h2 id="tracker-title">Track your order</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle" style="margin:9px 0">Order ${escapeHTML(order.id)}</p><div class="tracker-box"><div style="font-size:30px;margin-bottom:8px">🍱</div><strong>${escapeHTML(order.status)}</strong><p class="subtle" style="font-size:12px;margin:5px 0 0">${order.status === "Ready for pickup" ? "Head to the canteen counter when you're ready." : order.status === "Completed" ? "Enjoy your meal! Points are in your rewards." : "The canteen team is working on your order."}</p></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">Your GCash reference ${escapeHTML(order.paymentReference || "")} is waiting for staff to verify the transfer.</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">Staff confirmed your GCash payment.</p>` : ""}<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div><p class="footer-note">${realtimeEnabled ? "Order status syncs in real time with the canteen." : "This tracker updates when the canteen updates your order on this device."}</p></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="tracker-title"><div class="modal-head">  <h2 id="tracker-title">Track your order</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle" style="margin:9px 0">Order ${escapeHTML(order.id)}</p><div class="tracker-box"><div style="font-size:30px;margin-bottom:8px">🍱</div><strong>${escapeHTML(order.status)}</strong><p class="subtle" style="font-size:12px;margin:5px 0 0">${order.status === "Ready for pickup" ? "Head to the canteen counter when you're ready." : order.status === "Completed" ? "Enjoy your meal! Points are in your rewards." : order.status === "Cancelled" ? "This order was cancelled because the GCash transfer could not be confirmed. No payment was automatically taken or refunded." : "The canteen team is working on your order."}</p></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">Your GCash reference ${escapeHTML(order.paymentReference || "")} is waiting for staff to verify the transfer.</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">Staff confirmed your GCash payment.</p>` : order.paymentStatus === "not_received" ? `<p class="payment-review-note">Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "Stock was returned." : order.stockRestorationStatus === "manual_review" ? "Staff is correcting stock." : "Stock is being restored."}</p>` : ""}${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}<p class="footer-note">${realtimeEnabled ? "Order status syncs in real time with the canteen." : "This tracker updates when the canteen updates your order on this device."}</p></section></div>`;
   bindModalClose();
 }
 
@@ -562,7 +765,7 @@ function openInstallHelp() {
 }
 
 function openShareModal() {
-  const shareUrl = new URL(location.href);
+  const shareUrl = new URL(APP_PUBLIC_URL);
   shareUrl.search = "";
   shareUrl.hash = "";
   const shareable = shareUrl.protocol === "http:" || shareUrl.protocol === "https:";
@@ -570,13 +773,13 @@ function openShareModal() {
   const isLocalhost = shareUrl.hostname === "localhost" || shareUrl.hostname === "127.0.0.1";
 
   document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal share-modal" role="dialog" aria-modal="true" aria-labelledby="share-title"><div class="modal-head"><h2 id="share-title">Share CampuSnack</h2><button class="close-button" data-close aria-label="Close">×</button></div>
-    <p class="subtle share-description">${shareable ? "Scan this code to open the app, or copy its link." : "Open the app from an HTTP or HTTPS address before creating a shareable QR code."}</p>
+    <p class="subtle share-description">${shareable ? "Scan this code to open CampuSnack, or copy its link." : "Open the app from an HTTP or HTTPS address before creating a shareable QR code."}</p>
     ${qrMatrix ? `<div class="qr-frame"><canvas class="share-qr" id="share-qr" role="img" aria-label="QR code linking to CampuSnack"></canvas></div>` : `<div class="qr-unavailable">${shareable ? "This app address is too long to encode as a QR code. You can still copy the link below." : "A QR code needs a web address to share. Start a local web server or publish the app, then open that address here."}</div>`}
     <label class="share-link-label" for="share-url">App link</label><input id="share-url" class="share-url" type="url" readonly value="${escapeHTML(shareUrl.href)}">
     ${qrMatrix ? `<button class="secondary copy-share-link" id="share-qr-code" type="button">Share QR code</button><button class="secondary copy-share-link" id="download-share-qr" type="button">Download QR image</button>` : ""}
     ${shareable ? `<button class="secondary copy-share-link" id="copy-share-link" type="button">Copy link</button><button class="secondary share-install-button" data-install-app type="button">＋ Add to Home Screen</button>` : ""}
     ${isLocalhost ? `<p class="share-note">This address only works on this device. Publish the app to a public web address before sharing it with others.</p>` : ""}
-    <p class="share-note">The code is generated on this device. URL query parameters are not included.</p>
+    <p class="share-note">This QR always links to the public CampuSnack address. Publishing a newer version at that address makes the same QR open the updated app.</p>
   </section></div>`;
   if (qrMatrix) drawQrCode(document.getElementById("share-qr"), qrMatrix);
   document.getElementById("share-qr-code")?.addEventListener("click", () => exportQrCode(shareUrl.href, true));
@@ -891,11 +1094,20 @@ function renderStaff() {
     try {
       const verifiedAt = Date.now();
       if (realtimeEnabled) {
-        await ordersDatabase.ref("orders").child(order.id).update({
-          paymentStatus: "paid",
-          paymentVerifiedAt: verifiedAt,
-          paymentVerifiedBy: profile.name
-        });
+        const result = await ordersDatabase.ref("orders").child(order.id).transaction(current => {
+          if (!current || current.payment !== "QR" || current.paymentStatus !== "pending_review") return;
+          return {
+            ...current,
+            paymentStatus: "paid",
+            paymentVerifiedAt: verifiedAt,
+            paymentVerifiedBy: profile.name
+          };
+        }, undefined, false);
+        if (!result.committed) {
+          toast("This payment was already reviewed. Refreshing the queue.");
+          renderStaff();
+          return;
+        }
       } else {
         order.paymentStatus = "paid";
         order.paymentVerifiedAt = verifiedAt;
@@ -909,6 +1121,13 @@ function renderStaff() {
       toast("Payment could not be confirmed. Check staff access and your connection.");
       renderStaff();
     }
+  }));
+  document.querySelectorAll("[data-payment-cancel]").forEach(button => button.addEventListener("click", async () => {
+    const order = orders.find(item => item.id === button.dataset.paymentCancel);
+    if (!order || order.paymentStatus !== "pending_review" || order.payment !== "QR") return;
+    if (!window.confirm(`Cancel order ${order.id} because the GCash payment was not received? This will return the reserved products to stock. It will not issue a GCash refund.`)) return;
+    button.disabled = true;
+    await cancelUnreceivedQrOrder(order);
   }));
   document.getElementById("gcash-qr-file")?.addEventListener("change", async event => {
     const input = event.currentTarget;
@@ -973,10 +1192,81 @@ function renderStaff() {
   bindModalClose();
 }
 
+async function cancelUnreceivedQrOrder(order) {
+  const reviewedAt = Date.now();
+  try {
+    if (realtimeEnabled) {
+      const result = await ordersDatabase.ref("orders").child(order.id).transaction(current => {
+        if (!current || current.payment !== "QR" || current.paymentStatus !== "pending_review" || current.status === "Cancelled") return;
+        return {
+          ...current,
+          status: "Cancelled",
+          paymentStatus: "not_received",
+          paymentReviewedAt: reviewedAt,
+          paymentReviewedBy: profile.name,
+          stockRestorationStatus: "in_progress",
+          stockRestoredItemIds: []
+        };
+      }, undefined, false);
+      if (!result.committed) {
+        toast("This payment was already reviewed or the order changed. Refreshing the queue.");
+        renderStaff();
+        return;
+      }
+      Object.assign(order, result.snapshot.val());
+    } else {
+      order.status = "Cancelled";
+      order.paymentStatus = "not_received";
+      order.paymentReviewedAt = reviewedAt;
+      order.paymentReviewedBy = profile.name;
+      order.stockRestorationStatus = "in_progress";
+      order.stockRestoredItemIds = [];
+      write(STORAGE.orders, orders);
+    }
+
+    for (const item of order.items) {
+      if (realtimeEnabled) {
+        await changeSharedStock(item.id, Number(item.quantity));
+        const restoredIds = [...(order.stockRestoredItemIds || []), item.id];
+        await ordersDatabase.ref("orders").child(order.id).update({ stockRestoredItemIds: restoredIds });
+        order.stockRestoredItemIds = restoredIds;
+      } else {
+        const menuItem = menu.find(food => food.id === item.id);
+        if (!menuItem) throw new Error(`The product ${item.name} is missing from local stock.`);
+        menuItem.stock += Number(item.quantity);
+        order.stockRestoredItemIds = [...(order.stockRestoredItemIds || []), item.id];
+        write(STORAGE.menu, menu);
+        write(STORAGE.orders, orders);
+      }
+    }
+    order.stockRestorationStatus = "complete";
+    if (realtimeEnabled) {
+      await ordersDatabase.ref("orders").child(order.id).update({ stockRestorationStatus: "complete" });
+    } else {
+      write(STORAGE.orders, orders);
+    }
+    toast(`Order ${order.id} cancelled. Reserved stock was returned. No GCash payment was taken or refunded.`);
+  } catch (error) {
+    console.error(`Unable to fully cancel and restore stock for order ${order.id}.`, error);
+    order.stockRestorationStatus = "manual_review";
+    if (!realtimeEnabled) write(STORAGE.orders, orders);
+    else {
+      try {
+        await ordersDatabase.ref("orders").child(order.id).update({ stockRestorationStatus: "manual_review" });
+      } catch (statusError) {
+        console.error(`Unable to record stock-restoration failure for order ${order.id}.`, statusError);
+      }
+    }
+    toast(`Order ${order.id} is cancelled, but stock restoration failed. Check the order's product quantities and correct stock manually.`);
+  } finally {
+    renderStaff();
+  }
+}
+
 function staffOrdersContent() {
   const sorted = todayOrders().sort((a, b) => b.createdAt - a.createdAt);
   const orderContent = sorted.length
-    ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Placed</th><th>Status</th></tr></thead><tbody>${sorted.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}<div class="subtle" style="font-size:10px">${escapeHTML(order.grade)} · ${escapeHTML(order.section)}</div></td><td>${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? `<div class="subtle" style="font-size:10px">after points</div>` : ""}</td><td>${escapeHTML(order.payment)}${order.payment === "QR" ? `<div class="${order.paymentStatus === "paid" ? "payment-confirmed-note" : "payment-review-note"}">${order.paymentStatus === "paid" ? "Verified" : "Awaiting verification"}</div>` : ""}</td><td>${new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>${order.payment === "QR" && order.paymentStatus !== "paid" ? `<span class="subtle">Verify payment first</span>` : `<select class="status-select" data-status="${escapeHTML(order.id)}">${statuses.map(status => `<option ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}</select>`}</td></tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Placed</th><th>Status</th></tr></thead><tbody>${sorted.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}<div class="subtle" style="font-size:10px">${escapeHTML(order.grade)} · ${escapeHTML(order.section)}</div></td><td>${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? `<div class="subtle" style="font-size:10px">after points</div>` : ""}</td><td>${escapeHTML(order.payment)}${order.payment === "QR" ? `<div class="${order.paymentStatus === "paid" ? "payment-confirmed-note" : order.paymentStatus === "not_received" ? "payment-review-note" : "payment-review-note"}">${order.paymentStatus === "paid" ? "Verified" : order.paymentStatus === "not_received" ? "Not received" : "Awaiting verification"}</div>` : ""}</td><td>${new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>${order.status === "Cancelled" ? `<span class="order-status order-cancelled">Cancelled</span>` : order.payment === "QR" && order.paymentStatus !== "paid" ? `<span class="subtle">Verify payment first</span>` : `<select class="status-select" data-status="${escapeHTML(order.id)}">${statuses.map(status => `<option ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}</select>`}</td></tr>`).join("")}</tbody></table></div>`
     : `<div class="empty-state"><div class="empty-icon">📋</div>No orders today. New customer orders will appear here.</div>`;
   return `${salesReportContent()}${orderContent}`;
 }
@@ -996,7 +1286,7 @@ function staffPaymentsContent() {
       ${gcashQr?.imageData ? `<button id="remove-gcash-qr" class="secondary" type="button" style="margin-top:10px">Remove receiver QR</button>` : ""}
     </div>
     <div class="section-heading"><div><h2>Payments needing review</h2><p class="subtle" style="margin:5px 0 0">Check each transfer in the receiver's GCash account before confirming.</p></div></div>
-    ${pendingPayments.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>GCash reference</th><th>Submitted</th><th>Review</th></tr></thead><tbody>${pendingPayments.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "Missing")}</td><td>${new Date(order.createdAt).toLocaleString()}</td><td><button class="primary confirm-payment" type="button" data-payment-review="${escapeHTML(order.id)}">Confirm received</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>No GCash transfers are waiting for review.</div>`}
+    ${pendingPayments.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>GCash reference</th><th>Submitted</th><th>Review</th></tr></thead><tbody>${pendingPayments.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "Missing")}</td><td>${new Date(order.createdAt).toLocaleString()}</td><td><div class="payment-review-actions"><button class="primary confirm-payment" type="button" data-payment-review="${escapeHTML(order.id)}">Confirm received</button><button class="secondary cancel-payment" type="button" data-payment-cancel="${escapeHTML(order.id)}">Not received — cancel order</button></div></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>No GCash transfers are waiting for review.</div>`}
     <div class="section-heading"><div><h2>Recently confirmed</h2></div></div>
     ${recentConfirmed.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>Reference</th><th>Confirmed by</th></tr></thead><tbody>${recentConfirmed.map(order => `<tr><td>${escapeHTML(order.id)}</td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "")}</td><td>${escapeHTML(order.paymentVerifiedBy || "")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No GCash payments have been confirmed yet.</p>`}
     <p class="payment-review-note">CampuSnack cannot check GCash transactions automatically. Confirm only after the amount and reference are visible in the receiver's GCash transaction history. Never use a customer's screenshot alone as proof of payment.</p>`;
@@ -1294,8 +1584,17 @@ async function startApp() {
         return;
       }
       if (profile.role !== "Staff") {
-        const customer = user || (await firebaseAuth.signInAnonymously()).user;
-        profile.id = customer.uid;
+        const role = profile.role;
+        if (!user || user.isAnonymous || !user.multiFactor.enrolledFactors.length) {
+          profile = null;
+          localStorage.removeItem(STORAGE.profile);
+          if (user?.isAnonymous) await firebaseAuth.signOut();
+          customerAuthMode = "signin";
+          renderLogin(role);
+          toast("Student and teacher accounts now require a password and SMS verification. Sign in to secure your account.");
+          return;
+        }
+        profile.id = user.uid;
         write(STORAGE.profile, profile);
       }
       connectOrderSync();
