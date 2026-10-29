@@ -11,29 +11,29 @@ Open `index.html` in a modern browser. No package installation or build step is 
 Cross-device order and status updates require Firebase Realtime Database and Firebase Authentication:
 
 1. Create a Firebase project and a Realtime Database.
-2. In Firebase Authentication, enable **Email/Password** sign-in. Create an account for each staff member. Customer sign-in also uses Email/Password and SMS multi-factor authentication.
+2. In Firebase Authentication → **Sign-in method**, enable **Email/Password** for staff and **Phone** for students and teachers. Create an Email/Password account for each staff member.
 3. Copy the Firebase web app's `apiKey`, `authDomain`, `databaseURL`, `projectId`, and `appId` into `firebase-config.js`. These are public client settings; never put service-account keys or other private credentials in this file.
 4. In Realtime Database, add each authorized staff Firebase Auth UID at `/staffUids/<uid>` with the boolean value `true`. Do this in the Firebase Console; client writes to this allowlist are denied.
 5. Publish the contents of `database.rules.json` in Realtime Database → **Rules**.
 6. Host the app on HTTPS (or localhost during development), then open the same URL on customer and staff devices. Staff sign in with their Firebase account email and password.
 
-When Firebase is configured, staff see the shared live order queue and status changes propagate in real time. The first allowlisted staff session publishes the initial menu; later staff edits and stock adjustments are shared with signed-in staff, students, and teachers. Orders reserve shared stock using Realtime Database transactions, so concurrent orders cannot successfully take the same remaining units. Customer menu access, stock reservations, and order access require Firebase's SMS second-factor sign-in claim; staff UIDs in the database allowlist can read and update the queue and menu. If Firebase is not configured, the app keeps using local-only mode. If configuration is partially filled or Firebase fails to load, staff authentication is disabled rather than falling back to the local demo code.
+When Firebase is configured, staff see the shared live order queue and status changes propagate in real time. The first allowlisted staff session publishes the initial menu; later staff edits and stock adjustments are shared with signed-in staff, students, and teachers. Orders reserve shared stock using Realtime Database transactions, so concurrent orders cannot successfully take the same remaining units. Customer menu access, stock reservations, customer profiles, and order access require Firebase Phone authentication; staff UIDs in the database allowlist can read and update the queue and menu. If Firebase is not configured, the app keeps using local-only mode. If configuration is partially filled or Firebase fails to load, staff authentication is disabled rather than falling back to the local demo code.
 
-## Student and teacher SMS multi-factor authentication
+## Student and teacher phone sign-in
 
-Live student and teacher accounts require an email/password plus a Firebase SMS second factor. To enable it:
+Students and teachers sign in using a phone number and a Firebase SMS code. No email verification or password is required for customer accounts. To enable phone sign-in:
 
-1. Upgrade the Firebase project to **Identity Platform** in Firebase Authentication settings and enable SMS multi-factor authentication.
-2. Enable **Email/Password** as a sign-in provider. Configure the SMS region policy to allow the countries where your users receive texts, and review the project's SMS quotas and billing requirements.
+1. In Firebase Authentication → **Sign-in method**, enable **Phone**. Email/Password remains enabled for staff accounts.
+2. Configure the SMS region policy to allow the countries where users receive texts. Review Firebase's SMS quotas, abuse protections, and billing requirements; SMS may incur charges.
 3. Add the published website domain under Authentication → Settings → Authorized domains. Add `localhost` only when testing locally.
-4. Publish the included Realtime Database rules. They require the `firebase.sign_in_second_factor` claim for customer menu access, stock reservations, and private order access; an Email/Password session alone is not enough. Existing customer sessions previously created with anonymous sign-in must create a new email/password account and enroll a phone. This app does not migrate anonymous profiles or order history to the new account; staff can still see the older orders.
-5. Students and teachers select **Create account**, enter their Gmail address and a password, then enter their phone number in international format (for example `+639171234567`). Firebase's reCAPTCHA and SMS verification complete the phone enrollment. On later sign-ins, Firebase requires an SMS code after the password.
+4. Publish the included Realtime Database rules. They require Firebase's `firebase.sign_in_provider` claim to be `phone` for customer menu access, stock reservations, profiles, and order access.
+5. Students and teachers choose **Sign in** or **Create account**, enter their mobile number in international format (for example `+639171234567`), complete reCAPTCHA, then enter the SMS code. On first use, Firebase creates the phone account. First-time users also enter their name, grade/department, section, and LRN/employee ID. Their profile is saved to Realtime Database so it follows their account across devices.
 
-The app does not generate or send homemade codes. Firebase controls phone verification, SMS delivery, and MFA challenges. Real SMS enrollment and sign-in require the Identity Platform configuration above and must be tested with an SMS-capable phone. Staff accounts remain Email/Password accounts and do not use this student/teacher MFA flow.
+Firebase sends the code to the phone number at every customer sign-in. This is phone-based primary authentication—not email/password plus a second factor. Staff accounts continue to use Email/Password. Older anonymous or email/password customer accounts do not automatically become phone accounts, and their customer history will not automatically transfer.
 
 Student registration requires an LRN containing exactly 12 digits. Teacher registration requires an employee ID containing exactly 7 digits. The local demo staff form also accepts an optional 7-digit employee ID.
 
-After changing `database.rules.json`, publish the updated rules in Realtime Database → **Rules**. The `menu` path permits SMS-MFA customer reads and stock decrements plus allowlisted staff edits. The `paymentSettings/gcashQr` path allows SMS-MFA customers to read the receiver QR and only allowlisted staff to replace or remove it. The client-side demo is not a trusted payment or inventory system; production use should validate order creation, inventory, and points on a trusted server.
+After changing `database.rules.json`, publish the updated rules in Realtime Database → **Rules**. The `menu` path permits phone-authenticated customer reads and stock decrements plus allowlisted staff edits. The `paymentSettings/gcashQr` path allows phone-authenticated customers to read the receiver QR and only allowlisted staff to replace or remove it. The client-side demo is not a trusted payment or inventory system; production use should validate order creation, inventory, and points on a trusted server.
 
 Each new order receives a short display code (`A001`, `A002`, and so on) from a shared Realtime Database transaction, so simultaneous orders from different devices get different codes. The app keeps Firebase's unique order key internally for syncing and actions. Older orders without a display code continue to show their existing ID.
 
