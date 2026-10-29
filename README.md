@@ -31,7 +31,11 @@ Live student and teacher accounts require an email/password plus a Firebase SMS 
 
 The app does not generate or send homemade codes. Firebase controls phone verification, SMS delivery, and MFA challenges. Real SMS enrollment and sign-in require the Identity Platform configuration above and must be tested with an SMS-capable phone. Staff accounts remain Email/Password accounts and do not use this student/teacher MFA flow.
 
+Student registration requires an LRN containing exactly 12 digits. Teacher registration requires an employee ID containing exactly 7 digits. The local demo staff form also accepts an optional 7-digit employee ID.
+
 After changing `database.rules.json`, publish the updated rules in Realtime Database → **Rules**. The `menu` path permits SMS-MFA customer reads and stock decrements plus allowlisted staff edits. The `paymentSettings/gcashQr` path allows SMS-MFA customers to read the receiver QR and only allowlisted staff to replace or remove it. The client-side demo is not a trusted payment or inventory system; production use should validate order creation, inventory, and points on a trusted server.
+
+Each new order receives a short display code (`A001`, `A002`, and so on) from a shared Realtime Database transaction, so simultaneous orders from different devices get different codes. The app keeps Firebase's unique order key internally for syncing and actions. Older orders without a display code continue to show their existing ID.
 
 ## GCash QR payments
 
@@ -53,6 +57,7 @@ The included rules are a starting point for this demo. The app does not validate
 
 - Browse, search, and filter meals, rice bowls, snacks, and drinks.
 - Add items to a basket, adjust quantities, and choose wallet, QR, or cash at checkout.
+- Give each new order an easy-to-read short code for staff and customer order lookup.
 - Earn campus points, redeem points as a wallet discount, view rewards, order history, and a simple student or teacher profile.
 - Switch to Staff view to see weekly/monthly sales and top product demand, manage shared stock and menu items, and advance orders through received, preparing, ready, and completed.
 - Keep menu edits and stock levels synchronized across signed-in devices through Firebase Realtime Database.

@@ -3,7 +3,8 @@ const STORAGE = {
   orders: "campusnack.orders",
   menu: "campusnack.menu",
   likes: "campusnack.likes",
-  gcashQr: "campusnack.gcashQr"
+  gcashQr: "campusnack.gcashQr",
+  orderCounter: "campusnack.orderCounter"
 };
 const STAFF_CODE = "EAPIHS2009";
 const APP_PUBLIC_URL = "https://chels0506.github.io/campusnack/";
@@ -91,6 +92,7 @@ const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 }[char]));
 const money = amount => `₱${Number(amount).toFixed(2)}`;
+const orderCode = order => order.displayId || order.id;
 const pointsToPeso = points => Number(points) / 10;
 const dateKey = value => {
   const date = new Date(value);
@@ -151,13 +153,13 @@ function renderLogin(selectedRole = "Student") {
           <div class="field"><label for="gmail-address">Gmail address</label><input id="gmail-address" name="email" type="email" autocomplete="email" placeholder="you@gmail.com" required pattern="^[^@\\s]+@gmail\\.com$" title="Use a Gmail address ending in @gmail.com"></div>
           ${selectedRole !== "Staff" && realtimeEnabled ? `<div class="field"><label for="customer-password">Password</label><input id="customer-password" name="customerPassword" type="password" autocomplete="${customerAuthMode === "create" ? "new-password" : "current-password"}" minlength="8" placeholder="${customerAuthMode === "create" ? "Create at least 8 characters" : "Enter your password"}" required></div>` : ""}
           ${selectedRole === "Staff" ? `
-            ${realtimeEnabled ? `<div class="field"><label for="staff-password">Firebase password</label><input id="staff-password" name="staffPassword" type="password" autocomplete="current-password" placeholder="Enter your staff account password" required></div>` : `<div class="field"><label for="school-id">Employee ID <span class="subtle">(optional)</span></label><input id="school-id" name="schoolId" autocomplete="off" placeholder="Enter employee ID if you have one"></div><div class="field"><label for="staff-code">Local demo staff code</label><input id="staff-code" name="staffCode" type="password" autocomplete="off" placeholder="Enter the local demo code" required><div class="staff-code-help">This code is not secure authentication and must not be used for a live queue.</div></div>`}
+            ${realtimeEnabled ? `<div class="field"><label for="staff-password">Firebase password</label><input id="staff-password" name="staffPassword" type="password" autocomplete="current-password" placeholder="Enter your staff account password" required></div>` : `<div class="field"><label for="school-id">Employee ID <span class="subtle">(optional)</span></label><input id="school-id" name="schoolId" autocomplete="off" inputmode="numeric" pattern="[0-9]{7}" maxlength="7" data-digit-limit="7" title="Employee ID must be exactly 7 digits" placeholder="7 digits"></div><div class="field"><label for="staff-code">Local demo staff code</label><input id="staff-code" name="staffCode" type="password" autocomplete="off" placeholder="Enter the local demo code" required><div class="staff-code-help">This code is not secure authentication and must not be used for a live queue.</div></div>`}
           ` : `
             <div class="field-grid">
               <div class="field"><label for="grade-level">${selectedRole === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="grade-level" name="grade" placeholder="${selectedRole === "Teacher" ? "e.g. Mathematics" : "e.g. Grade 10"}" required></div>
               <div class="field"><label for="section">Section</label><input id="section" name="section" placeholder="e.g. Mabini" required></div>
             </div>
-            <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID" : "LRN"}</label><input id="school-id" name="schoolId" placeholder="${selectedRole === "Teacher" ? "Enter employee ID" : "Enter learner reference number"}" required></div>
+            <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID" : "LRN"}</label><input id="school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${selectedRole === "Teacher" ? 7 : 12}}" maxlength="${selectedRole === "Teacher" ? 7 : 12}" data-digit-limit="${selectedRole === "Teacher" ? 7 : 12}" title="${selectedRole === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" placeholder="${selectedRole === "Teacher" ? "Enter 7-digit employee ID" : "Enter 12-digit LRN"}" required><div class="field-help">${selectedRole === "Teacher" ? "Enter exactly 7 digits." : "Enter exactly 12 digits."}</div></div>
           `}
           <button class="primary" type="submit" ${realtimeSetupError ? "disabled" : ""}>${selectedRole === "Staff" ? "Sign in as Canteen Staff" : `Continue as ${selectedRole}`}</button>
           <div class="auth-notice">${realtimeSetupError ? "Firebase setup is unavailable. Correct the configuration or restore the Firebase SDK connection, then reload. Sign-in is disabled." : realtimeEnabled ? "Student and teacher sign-in requires an account password and SMS verification. New accounts must register a phone factor before using the app. Staff use their Firebase Email/Password account." : "Use a Gmail address ending in @gmail.com. This local demo checks the address format only; it does not verify your Google account. Information is saved only in this browser on this device."}</div>
@@ -170,6 +172,9 @@ function renderLogin(selectedRole = "Student") {
     document.querySelectorAll("[data-auth-mode]").forEach(button => button.addEventListener("click", () => {
       customerAuthMode = button.dataset.authMode;
       renderLogin(role);
+    }));
+    document.querySelectorAll("[data-digit-limit]").forEach(input => input.addEventListener("input", () => {
+      input.value = input.value.replace(/\D/g, "").slice(0, Number(input.dataset.digitLimit));
     }));
     bindShareApp();
     bindInstallApp();
@@ -190,6 +195,12 @@ function renderLogin(selectedRole = "Student") {
       return;
     }
     const schoolId = String(form.get("schoolId") || "").trim();
+    const requiredIdLength = role === "Student" ? 12 : role === "Teacher" ? 7 : 0;
+    if ((requiredIdLength && !new RegExp(`^\\d{${requiredIdLength}}$`).test(schoolId)) ||
+        (role === "Staff" && schoolId && !/^\d{7}$/.test(schoolId))) {
+      toast(role === "Student" ? "LRN must contain exactly 12 digits." : "Employee ID must contain exactly 7 digits.");
+      return;
+    }
     const name = String(form.get("name")).trim();
     const roleKey = role.toLowerCase();
     const finishLocalSignIn = () => {
@@ -585,7 +596,7 @@ function customerOrdersContent() {
   const list = customerOrders();
   return `<nav class="bottom-nav">${["Menu", "Orders", "Profile"].map(tab => `<button class="nav-tab ${customerTab === tab ? "active" : ""}" data-customer-tab="${tab}">${tab}</button>`).join("")}</nav>
     <div class="section-heading"><div><div class="eyebrow">Your canteen activity</div><h2>Order history</h2></div></div>
-    ${list.length ? `<div class="order-list">${list.map(order => `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(order.id)}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status ${order.status === "Cancelled" ? "order-cancelled" : ""}">${escapeHTML(order.status)}</span></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">GCash transfer reported · awaiting staff verification</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">GCash payment confirmed by staff</p>` : order.paymentStatus === "not_received" ? `<p class="payment-review-note">Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "The order was cancelled and stock returned." : order.stockRestorationStatus === "manual_review" ? "The order was cancelled; staff is correcting stock." : "The order was cancelled and stock is being restored."}</p>` : ""}<div style="font-size:12px;color:#657168">${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${order.points} pts</strong><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button></div>${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}</article>`).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
+    ${list.length ? `<div class="order-list">${list.map(order => `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(orderCode(order))}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status ${order.status === "Cancelled" ? "order-cancelled" : ""}">${escapeHTML(order.status)}</span></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">GCash transfer reported · awaiting staff verification</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">GCash payment confirmed by staff</p>` : order.paymentStatus === "not_received" ? `<p class="payment-review-note">Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "The order was cancelled and stock returned." : order.stockRestorationStatus === "manual_review" ? "The order was cancelled; staff is correcting stock." : "The order was cancelled and stock is being restored."}</p>` : ""}<div style="font-size:12px;color:#657168">${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${order.points} pts</strong><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button></div>${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}</article>`).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
 }
 
 function profileContent() {
@@ -604,6 +615,26 @@ async function changeSharedStock(id, amount) {
   }, undefined, false);
   if (!result.committed) throw new Error("The requested stock quantity is no longer available.");
   return result.snapshot.val();
+}
+
+async function nextOrderCode() {
+  let sequence;
+  if (realtimeEnabled) {
+    const result = await ordersDatabase.ref("orderCounter").transaction(current => {
+      return (Number(current) || 0) + 1;
+    }, undefined, false);
+    if (!result.committed) throw new Error("Could not assign an order code. Please try again.");
+    sequence = Number(result.snapshot.val());
+  } else {
+    const latestStored = Number(read(STORAGE.orderCounter, 0)) || 0;
+    const latestOrder = orders.reduce((highest, order) => {
+      const match = /^A(\d+)$/.exec(String(order.displayId || ""));
+      return match ? Math.max(highest, Number(match[1])) : highest;
+    }, 0);
+    sequence = Math.max(latestStored, latestOrder) + 1;
+    write(STORAGE.orderCounter, sequence);
+  }
+  return `A${String(sequence).padStart(3, "0")}`;
 }
 
 async function checkout() {
@@ -655,9 +686,11 @@ async function checkout() {
       return { id, name: item.name, quantity, price: item.price };
     });
     const walletDiscount = payment === "Wallet" ? Number(wallet.discount.toFixed(2)) : 0;
+    const displayId = await nextOrderCode();
     const orderRef = realtimeEnabled ? ordersDatabase.ref("orders").push() : null;
     const order = {
       id: orderRef ? orderRef.key : `CS${Date.now().toString().slice(-6)}`,
+      displayId,
       owner: profile.id,
       customer: profile.name,
       grade: profile.grade,
@@ -691,7 +724,7 @@ async function checkout() {
     write(STORAGE.menu, menu);
     customerTab = "Orders";
     render();
-    toast(`Order ${order.id} sent to the canteen!`);
+    toast(`Order ${orderCode(order)} sent to the canteen!`);
   } catch (error) {
     for (const [id, quantity] of reserved.reverse()) {
       try {
@@ -711,7 +744,7 @@ async function checkout() {
 function openTracker(orderId) {
   const order = customerOrders().find(item => item.id === orderId);
   if (!order) return;
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="tracker-title"><div class="modal-head">  <h2 id="tracker-title">Track your order</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle" style="margin:9px 0">Order ${escapeHTML(order.id)}</p><div class="tracker-box"><div style="font-size:30px;margin-bottom:8px">🍱</div><strong>${escapeHTML(order.status)}</strong><p class="subtle" style="font-size:12px;margin:5px 0 0">${order.status === "Ready for pickup" ? "Head to the canteen counter when you're ready." : order.status === "Completed" ? "Enjoy your meal! Points are in your rewards." : order.status === "Cancelled" ? "This order was cancelled because the GCash transfer could not be confirmed. No payment was automatically taken or refunded." : "The canteen team is working on your order."}</p></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">Your GCash reference ${escapeHTML(order.paymentReference || "")} is waiting for staff to verify the transfer.</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">Staff confirmed your GCash payment.</p>` : order.paymentStatus === "not_received" ? `<p class="payment-review-note">Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "Stock was returned." : order.stockRestorationStatus === "manual_review" ? "Staff is correcting stock." : "Stock is being restored."}</p>` : ""}${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}<p class="footer-note">${realtimeEnabled ? "Order status syncs in real time with the canteen." : "This tracker updates when the canteen updates your order on this device."}</p></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="tracker-title"><div class="modal-head">  <h2 id="tracker-title">Track your order</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle" style="margin:9px 0">Order ${escapeHTML(orderCode(order))}</p><div class="tracker-box"><div style="font-size:30px;margin-bottom:8px">🍱</div><strong>${escapeHTML(order.status)}</strong><p class="subtle" style="font-size:12px;margin:5px 0 0">${order.status === "Ready for pickup" ? "Head to the canteen counter when you're ready." : order.status === "Completed" ? "Enjoy your meal! Points are in your rewards." : order.status === "Cancelled" ? "This order was cancelled because the GCash transfer could not be confirmed. No payment was automatically taken or refunded." : "The canteen team is working on your order."}</p></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">Your GCash reference ${escapeHTML(order.paymentReference || "")} is waiting for staff to verify the transfer.</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">Staff confirmed your GCash payment.</p>` : order.paymentStatus === "not_received" ? `<p class="payment-review-note">Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "Stock was returned." : order.stockRestorationStatus === "manual_review" ? "Staff is correcting stock." : "Stock is being restored."}</p>` : ""}${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}<p class="footer-note">${realtimeEnabled ? "Order status syncs in real time with the canteen." : "This tracker updates when the canteen updates your order on this device."}</p></section></div>`;
   bindModalClose();
 }
 
@@ -1074,7 +1107,7 @@ function renderStaff() {
     const nextStatus = select.value;
     if (realtimeEnabled) {
       ordersDatabase.ref("orders").child(order.id).update({ status: nextStatus }).then(() => {
-        toast(`Order ${order.id} updated.`);
+        toast(`Order ${orderCode(order)} updated.`);
       }).catch(error => {
         console.error("Unable to update order status in Firebase.", error);
         toast("Could not update the order. Check staff access and your connection.");
@@ -1084,7 +1117,7 @@ function renderStaff() {
       order.status = nextStatus;
       write(STORAGE.orders, orders);
       renderStaff();
-      toast(`Order ${order.id} updated.`);
+      toast(`Order ${orderCode(order)} updated.`);
     }
   }));
   document.querySelectorAll("[data-payment-review]").forEach(button => button.addEventListener("click", async () => {
@@ -1115,9 +1148,9 @@ function renderStaff() {
         write(STORAGE.orders, orders);
         renderStaff();
       }
-      toast(`Payment for order ${order.id} confirmed.`);
+      toast(`Payment for order ${orderCode(order)} confirmed.`);
     } catch (error) {
-      console.error(`Unable to confirm GCash payment for order ${order.id}.`, error);
+      console.error(`Unable to confirm GCash payment for order ${orderCode(order)}.`, error);
       toast("Payment could not be confirmed. Check staff access and your connection.");
       renderStaff();
     }
@@ -1125,7 +1158,7 @@ function renderStaff() {
   document.querySelectorAll("[data-payment-cancel]").forEach(button => button.addEventListener("click", async () => {
     const order = orders.find(item => item.id === button.dataset.paymentCancel);
     if (!order || order.paymentStatus !== "pending_review" || order.payment !== "QR") return;
-    if (!window.confirm(`Cancel order ${order.id} because the GCash payment was not received? This will return the reserved products to stock. It will not issue a GCash refund.`)) return;
+    if (!window.confirm(`Cancel order ${orderCode(order)} because the GCash payment was not received? This will return the reserved products to stock. It will not issue a GCash refund.`)) return;
     button.disabled = true;
     await cancelUnreceivedQrOrder(order);
   }));
@@ -1245,7 +1278,7 @@ async function cancelUnreceivedQrOrder(order) {
     } else {
       write(STORAGE.orders, orders);
     }
-    toast(`Order ${order.id} cancelled. Reserved stock was returned. No GCash payment was taken or refunded.`);
+    toast(`Order ${orderCode(order)} cancelled. Reserved stock was returned. No GCash payment was taken or refunded.`);
   } catch (error) {
     console.error(`Unable to fully cancel and restore stock for order ${order.id}.`, error);
     order.stockRestorationStatus = "manual_review";
@@ -1257,7 +1290,7 @@ async function cancelUnreceivedQrOrder(order) {
         console.error(`Unable to record stock-restoration failure for order ${order.id}.`, statusError);
       }
     }
-    toast(`Order ${order.id} is cancelled, but stock restoration failed. Check the order's product quantities and correct stock manually.`);
+    toast(`Order ${orderCode(order)} is cancelled, but stock restoration failed. Check the order's product quantities and correct stock manually.`);
   } finally {
     renderStaff();
   }
@@ -1266,7 +1299,7 @@ async function cancelUnreceivedQrOrder(order) {
 function staffOrdersContent() {
   const sorted = todayOrders().sort((a, b) => b.createdAt - a.createdAt);
   const orderContent = sorted.length
-    ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Placed</th><th>Status</th></tr></thead><tbody>${sorted.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}<div class="subtle" style="font-size:10px">${escapeHTML(order.grade)} · ${escapeHTML(order.section)}</div></td><td>${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? `<div class="subtle" style="font-size:10px">after points</div>` : ""}</td><td>${escapeHTML(order.payment)}${order.payment === "QR" ? `<div class="${order.paymentStatus === "paid" ? "payment-confirmed-note" : order.paymentStatus === "not_received" ? "payment-review-note" : "payment-review-note"}">${order.paymentStatus === "paid" ? "Verified" : order.paymentStatus === "not_received" ? "Not received" : "Awaiting verification"}</div>` : ""}</td><td>${new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>${order.status === "Cancelled" ? `<span class="order-status order-cancelled">Cancelled</span>` : order.payment === "QR" && order.paymentStatus !== "paid" ? `<span class="subtle">Verify payment first</span>` : `<select class="status-select" data-status="${escapeHTML(order.id)}">${statuses.map(status => `<option ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}</select>`}</td></tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Placed</th><th>Status</th></tr></thead><tbody>${sorted.map(order => `<tr><td><strong>${escapeHTML(orderCode(order))}</strong></td><td>${escapeHTML(order.customer)}<div class="subtle" style="font-size:10px">${escapeHTML(order.grade)} · ${escapeHTML(order.section)}</div></td><td>${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? `<div class="subtle" style="font-size:10px">after points</div>` : ""}</td><td>${escapeHTML(order.payment)}${order.payment === "QR" ? `<div class="${order.paymentStatus === "paid" ? "payment-confirmed-note" : order.paymentStatus === "not_received" ? "payment-review-note" : "payment-review-note"}">${order.paymentStatus === "paid" ? "Verified" : order.paymentStatus === "not_received" ? "Not received" : "Awaiting verification"}</div>` : ""}</td><td>${new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>${order.status === "Cancelled" ? `<span class="order-status order-cancelled">Cancelled</span>` : order.payment === "QR" && order.paymentStatus !== "paid" ? `<span class="subtle">Verify payment first</span>` : `<select class="status-select" data-status="${escapeHTML(order.id)}" aria-label="Update status for order ${escapeHTML(orderCode(order))}">${statuses.map(status => `<option ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}</select>`}</td></tr>`).join("")}</tbody></table></div>`
     : `<div class="empty-state"><div class="empty-icon">📋</div>No orders today. New customer orders will appear here.</div>`;
   return `${salesReportContent()}${orderContent}`;
 }
@@ -1286,9 +1319,9 @@ function staffPaymentsContent() {
       ${gcashQr?.imageData ? `<button id="remove-gcash-qr" class="secondary" type="button" style="margin-top:10px">Remove receiver QR</button>` : ""}
     </div>
     <div class="section-heading"><div><h2>Payments needing review</h2><p class="subtle" style="margin:5px 0 0">Check each transfer in the receiver's GCash account before confirming.</p></div></div>
-    ${pendingPayments.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>GCash reference</th><th>Submitted</th><th>Review</th></tr></thead><tbody>${pendingPayments.map(order => `<tr><td><strong>${escapeHTML(order.id)}</strong></td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "Missing")}</td><td>${new Date(order.createdAt).toLocaleString()}</td><td><div class="payment-review-actions"><button class="primary confirm-payment" type="button" data-payment-review="${escapeHTML(order.id)}">Confirm received</button><button class="secondary cancel-payment" type="button" data-payment-cancel="${escapeHTML(order.id)}">Not received — cancel order</button></div></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>No GCash transfers are waiting for review.</div>`}
+    ${pendingPayments.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>GCash reference</th><th>Submitted</th><th>Review</th></tr></thead><tbody>${pendingPayments.map(order => `<tr><td><strong>${escapeHTML(orderCode(order))}</strong></td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "Missing")}</td><td>${new Date(order.createdAt).toLocaleString()}</td><td><div class="payment-review-actions"><button class="primary confirm-payment" type="button" data-payment-review="${escapeHTML(order.id)}">Confirm received</button><button class="secondary cancel-payment" type="button" data-payment-cancel="${escapeHTML(order.id)}">Not received — cancel order</button></div></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>No GCash transfers are waiting for review.</div>`}
     <div class="section-heading"><div><h2>Recently confirmed</h2></div></div>
-    ${recentConfirmed.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>Reference</th><th>Confirmed by</th></tr></thead><tbody>${recentConfirmed.map(order => `<tr><td>${escapeHTML(order.id)}</td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "")}</td><td>${escapeHTML(order.paymentVerifiedBy || "")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No GCash payments have been confirmed yet.</p>`}
+    ${recentConfirmed.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>Reference</th><th>Confirmed by</th></tr></thead><tbody>${recentConfirmed.map(order => `<tr><td>${escapeHTML(orderCode(order))}</td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "")}</td><td>${escapeHTML(order.paymentVerifiedBy || "")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No GCash payments have been confirmed yet.</p>`}
     <p class="payment-review-note">CampuSnack cannot check GCash transactions automatically. Confirm only after the amount and reference are visible in the receiver's GCash transaction history. Never use a customer's screenshot alone as proof of payment.</p>`;
 }
 
