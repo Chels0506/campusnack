@@ -63,6 +63,7 @@ let realtimeEnabled = false;
 let realtimeSetupError = null;
 let realtimeStatus = "connecting";
 let salesPeriod = "week";
+let selectedSalesBucket = null;
 let customerAuthMode = "signin";
 let pendingCustomerUser = null;
 let pendingCustomerRole = "Student";
@@ -992,29 +993,26 @@ function salesReportContent() {
   today.setHours(0, 0, 0, 0);
   const start = new Date(today);
   start.setDate(start.getDate() - dayCount + 1);
+  const periodEnd = new Date(today);
+  periodEnd.setDate(periodEnd.getDate() + 1);
   const bucketCount = salesPeriod === "week" ? 7 : 5;
-  const buckets = Array.from({ length: bucketCount }, (_, index) => ({
-    label: salesPeriod === "week" ? "" : `Week ${index + 1}`,
-    revenue: 0
-  }));
-  const completed = orders.filter(order => order.status === "Completed");
-  const periodOrders = completed.filter(order => Number(order.createdAt) >= start.getTime() && Number(order.createdAt) < today.getTime() + 86_400_000);
-  periodOrders.forEach(order => {
-    const orderDate = new Date(Number(order.createdAt));
-    orderDate.setHours(0, 0, 0, 0);
-    const dayIndex = Math.floor((orderDate.getTime() - start.getTime()) / 86_400_000);
-    const bucketIndex = salesPeriod === "week" ? dayIndex : Math.min(4, Math.floor(dayIndex / 7));
-    if (bucketIndex >= 0 && bucketIndex < buckets.length) {
-      buckets[bucketIndex].revenue += Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0));
-    }
+  const buckets = Array.from({ length: bucketCount }, (_, index) => {
+    const bucketStart = new Date(start);
+    bucketStart.setDate(start.getDate() + (salesPeriod === "week" ? index : index * 7));
+    const bucketEnd = new Date(bucketStart);
+    bucketEnd.setDate(bucketStart.getDate() + (salesPeriod === "week" ? 1 : 7));
+    if (bucketEnd > periodEnd) bucketEnd.setTime(periodEnd.getTime());
+    const label = salesPeriod === "week"
+      ? bucketStart.toLocaleDateString([], { weekday: "short" })
+      : `${bucketStart.toLocaleDateString([], { month: "short", day: "numeric" })}-${new Date(bucketEnd.getTime() - 1).toLocaleDateString([], { month: "short", day: "numeric" })}`;
+    return { label, start: bucketStart, end: bucketEnd, revenue: 0 };
   });
-  if (salesPeriod === "week") {
-    buckets.forEach((bucket, index) => {
-      const date = new Date(start);
-      date.setDate(start.getDate() + index);
-      bucket.label = date.toLocaleDateString([], { weekday: "short" });
-    });
-  }
+  const completed = orders.filter(order => order.status === "Completed");
+  const periodOrders = completed.filter(order => Number(order.createdAt) >= start.getTime() && Number(order.createdAt) < periodEnd.getTime());
+  periodOrders.forEach(order => {
+    const bucket = buckets.find(item => Number(order.createdAt) >= item.start.getTime() && Number(order.createdAt) < item.end.getTime());
+    if (bucket) bucket.revenue += Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0));
+  });
   const currentRevenue = buckets.reduce((sum, bucket) => sum + bucket.revenue, 0);
   const previousStart = new Date(start);
   previousStart.setDate(start.getDate() - dayCount);
@@ -1031,13 +1029,25 @@ function salesReportContent() {
     demand.set(key, current);
   }));
   const topProducts = [...demand.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 5);
+  const selectedBucket = buckets[selectedSalesBucket] || null;
+  const selectedOrders = selectedBucket
+    ? orders.filter(order => Number(order.createdAt) >= selectedBucket.start.getTime() && Number(order.createdAt) < selectedBucket.end.getTime())
+      .sort((a, b) => Number(b.createdAt) - Number(a.createdAt))
+    : [];
+  const dateLabel = bucket => salesPeriod === "week"
+    ? bucket.start.toLocaleDateString([], { weekday: "long", year: "numeric", month: "long", day: "numeric" })
+    : `${bucket.start.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })} - ${new Date(bucket.end.getTime() - 1).toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })}`;
+  const bucketOrderDetails = selectedBucket
+    ? `<section class="sales-order-history" aria-live="polite"><div class="sales-history-heading"><div><h3>Orders for ${escapeHTML(dateLabel(selectedBucket))}</h3><p class="subtle">${selectedOrders.length} order${selectedOrders.length === 1 ? "" : "s"} · ${money(selectedBucket.revenue)} completed sales</p></div><button class="secondary" type="button" data-sales-clear>Close</button></div>${selectedOrders.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Time</th><th>Items</th><th>Payment</th><th>Status</th><th>Amount</th></tr></thead><tbody>${selectedOrders.map(order => `<tr><td><strong>${escapeHTML(orderCode(order))}</strong><br>${escapeHTML(order.customer || "")}</td><td>${new Date(Number(order.createdAt)).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</td><td>${(Array.isArray(order.items) ? order.items : []).map(item => `${Number(item.quantity || 0)}x ${escapeHTML(item.name || "Item")}`).join(", ")}</td><td>${escapeHTML(order.payment || "")}</td><td>${escapeHTML(order.status || "Unknown")}${order.paymentStatus === "pending_review" ? "<br><small>Payment pending review</small>" : ""}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td></tr>`).join("")}</tbody></table></div>` : `<p class="sales-history-empty">No orders were placed in this ${salesPeriod === "week" ? "day" : "week"}.</p>`}</section>`
+    : `<p class="sales-history-hint">Select a bar to view the orders for that ${salesPeriod === "week" ? "day" : "week"}.</p>`;
 
   return `<div class="panel sales-report">
     <div class="section-heading" style="margin-top:0"><div><h2>Sales report</h2><p class="subtle" style="margin:5px 0 0">${salesPeriod === "week" ? "Last 7 days" : "Last 30 days"} · completed orders</p></div><div class="payment-options" style="max-width:180px"><button class="payment-option ${salesPeriod === "week" ? "active" : ""}" data-sales-period="week">Weekly</button><button class="payment-option ${salesPeriod === "month" ? "active" : ""}" data-sales-period="month">Monthly</button></div></div>
     <div class="stats-grid" style="margin:14px 0"><div class="stat-card"><span>Net sales</span><strong>${money(currentRevenue)}</strong></div><div class="stat-card"><span>vs. previous ${salesPeriod === "week" ? "week" : "30 days"}</span><strong>${progress === null ? "—" : `${progress >= 0 ? "+" : ""}${progress.toFixed(1)}%`}</strong></div></div>
-    <div class="sales-chart" style="grid-template-columns:repeat(${bucketCount},minmax(0,1fr))" role="img" aria-label="${salesPeriod === "week" ? "Weekly" : "Monthly"} completed sales bar chart">
-      ${buckets.map(bucket => `<div class="sales-bar-column" title="${escapeHTML(bucket.label)}: ${money(bucket.revenue)}"><span class="sales-bar-value">${bucket.revenue ? money(bucket.revenue) : "—"}</span><span class="sales-bar" style="height:${bucket.revenue ? Math.max(4, bucket.revenue / maxRevenue * 100) : 0}%"></span><span class="sales-bar-label">${escapeHTML(bucket.label)}</span></div>`).join("")}
+    <div class="sales-chart" style="grid-template-columns:repeat(${bucketCount},minmax(0,1fr))" role="group" aria-label="${salesPeriod === "week" ? "Daily" : "Weekly"} completed sales chart. Select a bar to view orders.">
+      ${buckets.map((bucket, index) => `<button class="sales-bar-column ${selectedSalesBucket === index ? "selected" : ""}" type="button" data-sales-bucket="${index}" aria-pressed="${selectedSalesBucket === index}" aria-label="${escapeHTML(dateLabel(bucket))}: ${money(bucket.revenue)} completed sales. Select to view orders." title="${escapeHTML(dateLabel(bucket))}: ${money(bucket.revenue)}"><span class="sales-bar-value">${bucket.revenue ? money(bucket.revenue) : "—"}</span><span class="sales-bar" style="height:${bucket.revenue ? Math.max(4, bucket.revenue / maxRevenue * 100) : 0}%"></span><span class="sales-bar-label">${escapeHTML(bucket.label)}</span></button>`).join("")}
     </div>
+    ${bucketOrderDetails}
     <div class="sales-demand"><h3>Highest product demand</h3>${topProducts.length ? `<ol>${topProducts.map(item => `<li><span>${escapeHTML(item.name)}</span><strong>${item.quantity} sold</strong></li>`).join("")}</ol>` : `<p class="subtle">No completed sales in this period yet.</p>`}</div>
   </div>`;
 }
@@ -1060,8 +1070,17 @@ function renderStaff() {
   document.querySelectorAll("[data-staff-tab]").forEach(button => button.addEventListener("click", () => { staffTab = button.dataset.staffTab; renderStaff(); }));
   document.querySelectorAll("[data-sales-period]").forEach(button => button.addEventListener("click", () => {
     salesPeriod = button.dataset.salesPeriod;
+    selectedSalesBucket = null;
     renderStaff();
   }));
+  document.querySelectorAll("[data-sales-bucket]").forEach(button => button.addEventListener("click", () => {
+    selectedSalesBucket = Number(button.dataset.salesBucket);
+    renderStaff();
+  }));
+  document.querySelector("[data-sales-clear]")?.addEventListener("click", () => {
+    selectedSalesBucket = null;
+    renderStaff();
+  });
   document.querySelectorAll("[data-status]").forEach(select => select.addEventListener("change", () => {
     const order = orders.find(item => item.id === select.dataset.status);
     if (!order) return;

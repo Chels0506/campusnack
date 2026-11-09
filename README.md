@@ -32,6 +32,8 @@ Email/Password is the customer sign-in method; Firebase does not send an SMS cod
 
 Student registration requires an LRN containing exactly 12 digits. Teacher registration requires an employee ID containing exactly 7 digits. The local demo staff form also accepts an optional 7-digit employee ID.
 
+Each student LRN and teacher employee ID can be registered only once across Firebase accounts. The app reserves each ID with a Realtime Database transaction before saving the profile, and the database rules require the matching reservation. Publish the latest `database.rules.json` for this check to work across devices. Existing student and teacher profiles are not automatically added to the claims registry; if the database already contains profiles, backfill `/studentLrnClaims/<12-digit-LRN>` and `/teacherEmployeeIdClaims/<7-digit-ID>` with each matching profile's UID before accepting new registrations. An ID already linked to another account cannot be reused; account recovery should use the original email/password account.
+
 After changing `database.rules.json`, publish the updated rules in Realtime Database → **Rules**. The `menu` path permits Email/Password-authenticated customer reads and stock decrements plus allowlisted staff edits. The `paymentSettings/gcashQr` path allows authenticated customers to read the receiver QR and only allowlisted staff to replace or remove it. The client-side demo is not a trusted payment or inventory system; production use should validate order creation, inventory, and points on a trusted server.
 
 Each new order receives a short display code (`A001`, `A002`, and so on) from a shared Realtime Database transaction, so simultaneous orders from different devices get different codes. The app keeps Firebase's unique order key internally for syncing and actions. Older orders without a display code continue to show their existing ID.
@@ -47,6 +49,7 @@ This app does not connect to GCash or verify transfers automatically. Orders pai
 ## Points and sales reports
 
 - Staff can view completed net sales for the last 7 days or 30 days, compare the selected period with the preceding period, and see the most-ordered products for that period.
+- Staff can select any bar in the sales report to review orders from that day (weekly view) or date range (monthly view), including order code, items, payment, status, and amount.
 - Points are earned when an order is completed. Wallet redemption converts 10 points to ₱1 (50 points = ₱5), applies available points as a partial discount up to the order total, and records the points used. The Wallet option is unavailable when there are no redeemable points.
 - This wallet is a points discount demo only. It does not collect or transfer actual money.
 
@@ -55,6 +58,7 @@ The included rules are a starting point for this demo. The app does not validate
 ## Features
 
 - Browse, search, and filter meals, rice bowls, snacks, and drinks.
+- Add menu items to the cart using the clearly labeled, touch-friendly **+ Add** buttons on desktop, tablet, and mobile.
 - Add items to a basket, adjust quantities, and choose wallet, QR, or cash at checkout.
 - Give each new order an easy-to-read short code for staff and customer order lookup.
 - Earn campus points, redeem points as a wallet discount, view rewards, order history, and a simple student or teacher profile.

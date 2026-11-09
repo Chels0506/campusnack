@@ -171,10 +171,21 @@ h1 { font-size:34px; margin:7px 0 5px; }
 .sales-report { margin-bottom:20px; }
 .sales-report .stats-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .sales-chart { height:190px; display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); align-items:end; gap:9px; padding:14px 8px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
-.sales-bar-column { height:100%; min-width:0; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:6px; }
+.sales-bar-column { height:100%; min-width:0; padding:0; border:0; border-radius:7px 7px 0 0; background:transparent; color:inherit; font:inherit; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:6px; cursor:pointer; }
+.sales-bar-column:hover,.sales-bar-column:focus-visible { background:#f3f7ed; }
+.sales-bar-column.selected { background:#e9f2df; }
 .sales-bar-value { min-height:13px; max-width:100%; overflow:hidden; color:var(--muted); font-size:9px; white-space:nowrap; }
 .sales-bar { display:block; width:min(34px,75%); min-height:0; border-radius:7px 7px 0 0; background:linear-gradient(180deg,#9fe38a,#2f9f74); }
+.sales-bar-column:hover .sales-bar,.sales-bar-column.selected .sales-bar { background:linear-gradient(180deg,#83cf68,#176b4c); }
 .sales-bar-label { padding-bottom:7px; color:var(--muted); font-size:10px; }
+.sales-history-hint,.sales-history-empty { margin:12px 0 0; padding:11px; border-radius:9px; background:#f7f7f1; color:var(--muted); font-size:11px; text-align:center; }
+.sales-order-history { margin-top:14px; padding:14px; border:1px solid var(--line); border-radius:12px; background:#fff; }
+.sales-history-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.sales-history-heading h3 { margin:0 0 4px; font-size:14px; }
+.sales-history-heading .subtle { margin:0; font-size:11px; }
+.sales-order-history td { vertical-align:top; min-width:75px; }
+.sales-order-history td:nth-child(3) { min-width:160px; }
+.sales-order-history td small { color:var(--muted); }
 .sales-demand { margin-top:18px; }
 .sales-demand h3 { margin:0 0 9px; font-size:14px; }
 .sales-demand ol { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px 18px; margin:0; padding-left:22px; }
