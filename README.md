@@ -49,7 +49,7 @@ This app does not connect to GCash or verify transfers automatically. Orders pai
 ## Points and sales reports
 
 - Staff can view completed net sales for the last 7 days or 30 days, compare the selected period with the preceding period, and see the most-ordered products for that period.
-- Staff can select any bar in the sales report to review orders from that day (weekly view) or date range (monthly view), including order code, items, payment, status, and amount.
+- Staff can select any bar in the sales report to review orders from that day (weekly view) or date range (monthly view), grouped under clear date separators with order code, items, payment, status, and amount.
 - Points are earned when an order is completed. Wallet redemption converts 10 points to ₱1 (50 points = ₱5), applies available points as a partial discount up to the order total, and records the points used. The Wallet option is unavailable when there are no redeemable points.
 - This wallet is a points discount demo only. It does not collect or transfer actual money.
 
