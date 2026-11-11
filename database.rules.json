@@ -25,6 +25,15 @@
         ".validate": "newData.hasChildren(['imageData', 'updatedAt']) && newData.child('imageData').isString() && newData.child('imageData').val().length <= 300000 && newData.child('updatedAt').isNumber()"
       }
     },
+    "notificationTokens": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid && auth.token.firebase.sign_in_provider === 'password'",
+        "$deviceId": {
+          ".write": "auth != null && auth.uid === $uid && auth.token.firebase.sign_in_provider === 'password'",
+          ".validate": "newData.hasChildren(['token', 'updatedAt']) && newData.child('token').isString() && newData.child('token').val().length > 0 && newData.child('token').val().length <= 4096 && newData.child('updatedAt').isNumber()"
+        }
+      }
+    },
     "studentLrnClaims": {
       "$lrn": {
         ".read": "auth != null && auth.token.firebase.sign_in_provider === 'password' && (!data.exists() || data.val() === auth.uid)",

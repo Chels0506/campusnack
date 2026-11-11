@@ -168,6 +168,10 @@ h1 { font-size:34px; margin:7px 0 5px; }
 .profile-photo-placeholder { display:grid; place-items:center; background:#e4eed0; color:var(--green); font-size:34px; font-weight:800; }
 .profile-details { display:grid; gap:6px; margin-top:20px; padding-top:16px; border-top:1px solid var(--line); font-size:13px; }
 .profile-details span { color:var(--muted); overflow-wrap:anywhere; }
+.notification-settings { display:grid; gap:8px; margin-top:18px; padding:14px; border:1px solid var(--line); border-radius:12px; background:#f7f7f1; }
+.notification-settings h3,.notification-settings p { margin:0; }
+.notification-settings h3 { font-size:14px; }
+.notification-settings .secondary { justify-self:start; }
 .stat-card { background:#f7f7f1; padding:15px; border-radius:12px; }
 .stat-card span { font-size:11px; color:var(--muted); display:block; margin-bottom:6px; }
 .stat-card strong { font:800 22px Manrope,sans-serif; }

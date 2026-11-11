@@ -48,6 +48,22 @@ Customers can cancel their own orders from **Order history** only while the stat
 
 This app does not connect to GCash or verify transfers automatically. Orders paid by QR remain blocked from preparation until staff confirms them. Never treat a customer screenshot alone as proof of payment, and do not upload account passwords, PINs, or other credentials. Use only a QR issued for the canteen's authorized receiving account.
 
+## Phone notifications
+
+The app supports opt-in web push alerts for signed-in staff and customers. Staff receive a notification when a new order is created; customers receive one when their order status changes. Each person must enable notifications on each device from **Profile → Phone notifications**. On iPhone or iPad, install CampuSnack from Safari's **Share → Add to Home Screen**, open the installed app, and enable notifications there (iOS/iPadOS 16.4 or newer).
+
+Firebase Cloud Messaging and a Web Push key are configured in the public web-app settings. The public Firebase and VAPID settings are not service-account credentials. Order-event notifications are sent by the trusted Firebase Functions backend; no server credential belongs in the browser app.
+
+To publish the notification backend and the database token rules:
+
+1. Enable Firebase billing on the **Blaze** plan if Firebase requires it for Cloud Functions. Review Firebase pricing and usage limits before upgrading; deployment can incur charges.
+2. Install Node.js 20. In a terminal, run `npm install -g firebase-tools`, then `firebase login` with an account that can deploy to the CampuSnack Firebase project.
+3. From the project root, run `npm install --prefix functions`.
+4. From the project root, run `firebase deploy --only functions,database`.
+5. Publish the updated static app files to GitHub Pages. Then sign in on each phone, open **Profile → Phone notifications**, and enable alerts.
+
+The functions notify only allowlisted staff at `/staffUids` and the customer who owns an order. They remove tokens that Firebase reports as invalid. Firebase Functions are not deployed by publishing the static GitHub Pages site alone.
+
 ## Points and sales reports
 
 - Staff can view completed net sales for the last 7 days or 30 days, compare the selected period with the preceding period, and see the most-ordered products for that period.
@@ -70,5 +86,6 @@ The included rules are a starting point for this demo. The app does not validate
 - In the staff **Menu** tab, choose or take menu photos through the phone's standard photo picker, or slide an item's delete control fully and confirm to remove it from the shared menu and stock tracker. Existing orders remain unchanged.
 - Profile picture and product photo forms each use one photo picker, avoiding duplicate camera controls on mobile.
 - Share the app link or its QR code from the **Share app** dialog. Share the QR image through the device share sheet when supported, or download it as a PNG.
+- Opt in to phone notifications from the profile on each staff or customer device.
 - The app QR always points to `https://chels0506.github.io/campusnack/`. After publishing new files to that same URL, existing QR codes open the latest deployed version; app changes still need to be published to the hosting provider.
 - Save menu, profile, cart, and other local demo data in this browser.

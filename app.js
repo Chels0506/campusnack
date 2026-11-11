@@ -4,7 +4,8 @@ const STORAGE = {
   menu: "campusnack.menu",
   likes: "campusnack.likes",
   gcashQr: "campusnack.gcashQr",
-  orderCounter: "campusnack.orderCounter"
+  orderCounter: "campusnack.orderCounter",
+  notificationDeviceId: "campusnack.notificationDeviceId"
 };
 const STAFF_CODE = "EAPIHS2009";
 const APP_PUBLIC_URL = "https://chels0506.github.io/campusnack/";
@@ -60,6 +61,8 @@ let toastTimer;
 let installPrompt = null;
 let firebaseAuth = null;
 let ordersDatabase = null;
+let firebaseMessaging = null;
+let messagingListenerAttached = false;
 let orderSubscription = null;
 let menuSubscription = null;
 let paymentSettingsSubscription = null;
@@ -73,7 +76,7 @@ let pendingCustomerUser = null;
 let pendingCustomerRole = "Student";
 
 function setupRealtime() {
-  const configValues = ["apiKey", "authDomain", "databaseURL", "projectId", "appId"];
+  const configValues = ["apiKey", "authDomain", "databaseURL", "projectId", "messagingSenderId", "appId"];
   const configuredValues = configValues.filter(key => Boolean(firebaseConfig[key]));
   if (!configuredValues.length) return;
   if (configuredValues.length !== configValues.length) {
@@ -120,6 +123,136 @@ function toast(message) {
   document.body.append(node);
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => node.remove(), 2600);
+}
+
+function notificationTokenReference(uid) {
+  let deviceId = read(STORAGE.notificationDeviceId, "");
+  if (!deviceId) {
+    deviceId = ordersDatabase.ref().push().key;
+    if (!deviceId) throw new Error("Could not create a notification device ID.");
+    write(STORAGE.notificationDeviceId, deviceId);
+  }
+  return ordersDatabase.ref("notificationTokens").child(uid).child(deviceId);
+}
+
+async function getFirebaseMessaging() {
+  if (!window.firebase?.messaging || typeof window.firebase.messaging.isSupported !== "function") {
+    throw new Error("Firebase Messaging did not load. Reload the app while connected to the internet.");
+  }
+  if (!(await window.firebase.messaging.isSupported())) {
+    throw new Error("This browser does not support CampuSnack push notifications. On iPhone, install the app from Safari's Share menu first.");
+  }
+  if (!firebaseMessaging) firebaseMessaging = window.firebase.messaging();
+  if (!messagingListenerAttached) {
+    firebaseMessaging.onMessage(async payload => {
+      const data = payload.data || {};
+      if (Notification.permission !== "granted") return;
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        await registration.showNotification(data.title || "CampuSnack update", {
+          body: data.body || "There is an update about CampuSnack.",
+          icon: "./icons/icon-192.png",
+          badge: "./icons/icon-192.png",
+          data: { url: data.url || "./" }
+        });
+      } catch (error) {
+        console.error("Unable to display a foreground CampuSnack notification.", error);
+        toast("A CampuSnack update arrived, but this device could not display its notification.");
+      }
+    });
+    messagingListenerAttached = true;
+  }
+  return firebaseMessaging;
+}
+
+async function refreshNotificationControls() {
+  const button = document.getElementById("notification-toggle");
+  const message = document.getElementById("notification-status");
+  if (!button || !message) return;
+  button.disabled = true;
+  if (!realtimeEnabled || !firebaseAuth?.currentUser || firebaseAuth.currentUser.uid !== profile?.id) {
+    button.textContent = "Notifications unavailable";
+    message.textContent = "Sign in with a connected Firebase account to enable phone alerts.";
+    return;
+  }
+  if (typeof Notification === "undefined" || !navigator.serviceWorker || !window.isSecureContext) {
+    button.textContent = "Notifications unavailable";
+    message.textContent = "Notifications require a supported browser and a secure HTTPS connection.";
+    return;
+  }
+  try {
+    if (!(await window.firebase.messaging.isSupported())) {
+      button.textContent = "Notifications unavailable";
+      message.textContent = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+        ? "On iPhone or iPad, add CampuSnack to the Home Screen and open the installed app first."
+        : "This browser does not support web push notifications.";
+      return;
+    }
+    const snapshot = await notificationTokenReference(profile.id).once("value");
+    const registered = snapshot.exists();
+    button.textContent = registered ? "Turn off on this device" : "Enable order notifications";
+    button.disabled = Notification.permission === "denied" && !registered;
+    message.textContent = Notification.permission === "denied"
+      ? "Notifications are blocked in this browser. Allow them in the browser or device settings."
+      : registered
+        ? "This device is set to receive CampuSnack order alerts."
+        : "Alerts are sent to this device only after you enable them.";
+  } catch (error) {
+    console.error("Unable to check CampuSnack notification settings.", error);
+    button.textContent = "Notifications unavailable";
+    message.textContent = "Could not check notification settings. Check your connection and Firebase rules.";
+  }
+}
+
+async function toggleNotificationSubscription(button) {
+  const message = document.getElementById("notification-status");
+  button.disabled = true;
+  try {
+    const tokenReference = notificationTokenReference(profile.id);
+    const savedToken = await tokenReference.once("value");
+    if (savedToken.exists()) {
+      await tokenReference.remove();
+      try {
+        const messaging = await getFirebaseMessaging();
+        await messaging.deleteToken();
+      } catch (error) {
+        console.error("Unable to clear the device's Firebase Messaging token.", error);
+        if (message) message.textContent = "Notifications are disabled for this account, but the browser could not clear its old token.";
+        toast("Notifications were removed from this account, but this browser could not clear the old token.");
+        await refreshNotificationControls();
+        return;
+      }
+      toast("Notifications turned off on this device.");
+      await refreshNotificationControls();
+      return;
+    }
+    if (Notification.permission === "denied") {
+      throw new Error("Notifications are blocked. Allow them in your browser or device settings, then try again.");
+    }
+    const permission = Notification.permission === "granted"
+      ? "granted"
+      : await Notification.requestPermission();
+    if (permission !== "granted") {
+      if (message) message.textContent = "Notification permission was not granted. You can enable it later in browser settings.";
+      await refreshNotificationControls();
+      return;
+    }
+    const messaging = await getFirebaseMessaging();
+    const registration = await navigator.serviceWorker.ready;
+    const token = await messaging.getToken({
+      vapidKey: window.CAMPUSNACK_VAPID_KEY,
+      serviceWorkerRegistration: registration
+    });
+    if (!token) throw new Error("Firebase did not return a notification token. Check the Firebase web-push key and try again.");
+    await tokenReference.set({ token, updatedAt: Date.now() });
+    toast("Order notifications enabled on this device.");
+    await refreshNotificationControls();
+  } catch (error) {
+    console.error("Unable to update CampuSnack notification settings.", error);
+    if (message) message.textContent = error.message || "Could not update notification settings.";
+    toast(error.message || "Could not update notification settings. Check your connection and Firebase rules.");
+    button.disabled = false;
+  }
 }
 
 function render() {
@@ -828,8 +961,10 @@ function openProfileModal() {
   const avatar = profile.photoData
     ? `<img id="profile-photo-preview" class="profile-photo-preview" src="${escapeHTML(profile.photoData)}" alt="Profile photo">`
     : `<div id="profile-photo-placeholder" class="profile-photo-placeholder" aria-hidden="true">${escapeHTML(profile.name.charAt(0).toUpperCase())}</div>`;
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title"><div class="modal-head"><h2 id="profile-modal-title">Your profile</h2><button class="close-button" data-close aria-label="Close">×</button></div><div class="profile-photo-wrap">${avatar}</div><form id="profile-photo-form"><div class="field"><label for="profile-photo-gallery">Choose a photo from your gallery</label><input id="profile-photo-gallery" type="file" accept="image/*"><span class="field-help">Choose a photo from your album or use your phone's photo picker.</span></div><button id="save-profile-photo" class="primary" type="submit" disabled>Save profile photo</button></form><div class="profile-details"><strong>${escapeHTML(profile.name)}</strong><span>${escapeHTML(profile.role)}</span><span>${escapeHTML(profile.email || "")}</span>${isCustomer ? `<span>${profile.role === "Student" ? "Grade" : "Department"}: ${escapeHTML(profile.grade || "")}</span><span>Section: ${escapeHTML(profile.section || "")}</span><span>${profile.role === "Student" ? "LRN" : "Employee ID"}: ${escapeHTML(profile.schoolId || "")}</span>` : ""}</div></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title"><div class="modal-head"><h2 id="profile-modal-title">Your profile</h2><button class="close-button" data-close aria-label="Close">×</button></div><div class="profile-photo-wrap">${avatar}</div><form id="profile-photo-form"><div class="field"><label for="profile-photo-gallery">Choose a photo from your gallery</label><input id="profile-photo-gallery" type="file" accept="image/*"><span class="field-help">Choose a photo from your album or use your phone's photo picker.</span></div><button id="save-profile-photo" class="primary" type="submit" disabled>Save profile photo</button></form><div class="notification-settings"><h3>Phone notifications</h3><p class="field-help">Get an alert when a new order arrives for staff or your order status changes.</p><button id="notification-toggle" class="secondary" type="button" disabled>Checking availability…</button><p id="notification-status" class="field-help" role="status">Checking this device's notification support.</p></div><div class="profile-details"><strong>${escapeHTML(profile.name)}</strong><span>${escapeHTML(profile.role)}</span><span>${escapeHTML(profile.email || "")}</span>${isCustomer ? `<span>${profile.role === "Student" ? "Grade" : "Department"}: ${escapeHTML(profile.grade || "")}</span><span>Section: ${escapeHTML(profile.section || "")}</span><span>${profile.role === "Student" ? "LRN" : "Employee ID"}: ${escapeHTML(profile.schoolId || "")}</span>` : ""}</div></section></div>`;
   bindModalClose();
+  document.getElementById("notification-toggle")?.addEventListener("click", event => toggleNotificationSubscription(event.currentTarget));
+  refreshNotificationControls();
   const saveButton = document.getElementById("save-profile-photo");
   const handleProfilePhoto = async fileInput => {
     const file = fileInput.files?.[0];
@@ -1815,7 +1950,15 @@ function resizeMenuImage(file) {
   });
 }
 
-function logout() {
+async function logout() {
+  if (realtimeEnabled && firebaseAuth.currentUser && profile) {
+    try {
+      await notificationTokenReference(profile.id).remove();
+    } catch (error) {
+      console.error("Unable to remove this device's notification registration during sign out.", error);
+      toast("Could not remove this device's notification registration. Check your connection and try again.");
+    }
+  }
   if (orderSubscription) {
     orderSubscription.off("value");
     orderSubscription = null;
