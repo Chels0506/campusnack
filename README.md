@@ -67,8 +67,8 @@ The included rules are a starting point for this demo. The app does not validate
 - Open the profile from the top-right account control to view personal details and upload a profile photo. Photos sync with Firebase for signed-in accounts.
 - Switch to Staff view to see weekly/monthly sales and top product demand, manage shared stock and menu items, and advance orders through received, preparing, ready, and completed.
 - Keep menu edits and stock levels synchronized across signed-in devices through Firebase Realtime Database.
-- In the staff **Menu** tab, add or edit menu photos from a phone camera or photo library, or slide an item's delete control fully and confirm to remove it from the shared menu and stock tracker. Existing orders remain unchanged.
-- Profile picture and product photo forms have separate gallery and camera inputs so mobile users can choose an existing image or take a new one.
+- In the staff **Menu** tab, choose or take menu photos through the phone's standard photo picker, or slide an item's delete control fully and confirm to remove it from the shared menu and stock tracker. Existing orders remain unchanged.
+- Profile picture and product photo forms each use one photo picker, avoiding duplicate camera controls on mobile.
 - Share the app link or its QR code from the **Share app** dialog. Share the QR image through the device share sheet when supported, or download it as a PNG.
 - The app QR always points to `https://chels0506.github.io/campusnack/`. After publishing new files to that same URL, existing QR codes open the latest deployed version; app changes still need to be published to the hosting provider.
 - Save menu, profile, cart, and other local demo data in this browser.
