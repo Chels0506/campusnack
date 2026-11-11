@@ -571,7 +571,7 @@ function customerOrdersContent() {
     <div class="section-heading"><div><div class="eyebrow">Your canteen activity</div><h2>Order history</h2></div></div>
     ${list.length ? `<div class="order-list">${list.map(order => {
       const message = order.customerCancelledAt
-        ? `${order.stockRestorationStatus === "complete" ? "Reserved stock was returned." : order.stockRestorationStatus === "manual_review" ? "Stock return needs staff review." : "Canteen staff will return the reserved stock."}${order.payment === "QR" && order.paymentStatus === "pending_review" ? " If you sent GCash, contact staff; refunds are not automatic." : ""}`
+        ? `${order.stockRestorationStatus === "complete" ? "Reserved stock was returned." : order.stockRestorationStatus === "manual_review" ? "Stock return needs staff review." : "Canteen staff will return the reserved stock."}${order.payment === "QR" ? " If you sent GCash, contact staff to arrange a refund; refunds are not automatic." : ""}`
         : order.paymentStatus === "pending_review"
           ? "GCash transfer reported · awaiting staff verification"
           : order.paymentStatus === "paid"
@@ -579,7 +579,22 @@ function customerOrdersContent() {
             : order.paymentStatus === "not_received"
               ? `Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "Stock was returned." : order.stockRestorationStatus === "manual_review" ? "Stock return needs staff review." : "Stock is being returned."}`
               : "";
-      return `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(orderCode(order))}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status ${order.status === "Cancelled" ? "order-cancelled" : ""}">${escapeHTML(order.status)}</span></div>${message ? `<p class="${order.paymentStatus === "paid" ? "payment-confirmed-note" : "payment-review-note"}">${escapeHTML(message)}</p>` : ""}<div style="font-size:12px;color:#657168">${(order.items || []).map(item => `${Number(item.quantity || 0)}× ${escapeHTML(item.name || "Item")}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${Number(order.points || 0)} pts</strong><div class="order-actions"><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button>${order.status === "Received" && order.paymentStatus !== "paid" ? `<button class="secondary cancel-order-button" data-cancel-order="${escapeHTML(order.id)}">Cancel order</button>` : ""}</div></div>${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}</article>`;
+      return `<article class="order-card">
+        <div class="order-card-top">
+          <div><strong>Order ${escapeHTML(orderCode(order))}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div>
+          <span class="order-status ${order.status === "Cancelled" ? "order-cancelled" : ""}">${escapeHTML(order.status)}</span>
+        </div>
+        ${message ? `<p class="${order.paymentStatus === "paid" ? "payment-confirmed-note" : "payment-review-note"}">${escapeHTML(message)}</p>` : ""}
+        <div style="font-size:12px;color:#657168">${(order.items || []).map(item => `${Number(item.quantity || 0)}× ${escapeHTML(item.name || "Item")}`).join(", ")}</div>
+        <div class="order-card-top" style="margin-top:12px">
+          <strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${Number(order.points || 0)} pts</strong>
+          <div class="order-actions">
+            <button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button>
+            ${order.status === "Received" ? `<button class="secondary cancel-order-button" data-cancel-order="${escapeHTML(order.id)}">Cancel order</button>` : ""}
+          </div>
+        </div>
+        ${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}
+      </article>`;
     }).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
 }
 
@@ -614,7 +629,7 @@ async function nextOrderCode() {
 
 async function cancelCustomerOrder(orderId, button) {
   const order = customerOrders().find(item => item.id === orderId);
-  if (!order || order.status !== "Received" || order.paymentStatus === "paid") return;
+  if (!order || order.status !== "Received") return;
   const stockNotice = realtimeEnabled
     ? "Canteen staff will return the reserved products to stock."
     : "The reserved products will be returned to stock.";
@@ -627,21 +642,12 @@ async function cancelCustomerOrder(orderId, button) {
   let cancellationCommitted = false;
   try {
     if (realtimeEnabled) {
-      const result = await ordersDatabase.ref("orders").child(order.id).transaction(current => {
-        if (!current || current.owner !== profile.id || current.status !== "Received" || current.paymentStatus === "paid") return;
-        return {
-          ...current,
-          status: "Cancelled",
-          customerCancelledAt: cancelledAt,
-          stockRestorationStatus: "pending_staff",
-          stockRestoredItemIds: []
-        };
-      }, undefined, false);
-      if (!result.committed) {
-        toast("This order has already started or changed and can no longer be cancelled.");
-        return;
-      }
-      Object.assign(order, result.snapshot.val());
+      await ordersDatabase.ref("orders").child(order.id).update({
+        status: "Cancelled",
+        customerCancelledAt: cancelledAt
+      });
+      order.status = "Cancelled";
+      order.customerCancelledAt = cancelledAt;
       cancellationCommitted = true;
       toast(`Order ${orderCode(order)} cancelled. Canteen staff will restore the reserved stock.`);
       return;
@@ -822,11 +828,10 @@ function openProfileModal() {
   const avatar = profile.photoData
     ? `<img id="profile-photo-preview" class="profile-photo-preview" src="${escapeHTML(profile.photoData)}" alt="Profile photo">`
     : `<div id="profile-photo-placeholder" class="profile-photo-placeholder" aria-hidden="true">${escapeHTML(profile.name.charAt(0).toUpperCase())}</div>`;
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title"><div class="modal-head"><h2 id="profile-modal-title">Your profile</h2><button class="close-button" data-close aria-label="Close">×</button></div><div class="profile-photo-wrap">${avatar}</div><form id="profile-photo-form"><div class="field"><label for="profile-photo-input">Profile picture</label><input id="profile-photo-input" type="file" accept="image/*" capture="user"><span class="field-help">Take a photo or choose one from your device. It will sync to your account.</span></div><button id="save-profile-photo" class="primary" type="submit" disabled>Save profile photo</button></form><div class="profile-details"><strong>${escapeHTML(profile.name)}</strong><span>${escapeHTML(profile.role)}</span><span>${escapeHTML(profile.email || "")}</span>${isCustomer ? `<span>${profile.role === "Student" ? "Grade" : "Department"}: ${escapeHTML(profile.grade || "")}</span><span>Section: ${escapeHTML(profile.section || "")}</span><span>${profile.role === "Student" ? "LRN" : "Employee ID"}: ${escapeHTML(profile.schoolId || "")}</span>` : ""}</div></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title"><div class="modal-head"><h2 id="profile-modal-title">Your profile</h2><button class="close-button" data-close aria-label="Close">×</button></div><div class="profile-photo-wrap">${avatar}</div><form id="profile-photo-form"><div class="field"><label for="profile-photo-gallery">Choose a photo from your gallery</label><input id="profile-photo-gallery" type="file" accept="image/*"><label for="profile-photo-camera" class="photo-camera-label">Or take a new photo</label><input id="profile-photo-camera" type="file" accept="image/*" capture="user"><span class="field-help">Select a photo from your album or use your camera. It will sync to your account.</span></div><button id="save-profile-photo" class="primary" type="submit" disabled>Save profile photo</button></form><div class="profile-details"><strong>${escapeHTML(profile.name)}</strong><span>${escapeHTML(profile.role)}</span><span>${escapeHTML(profile.email || "")}</span>${isCustomer ? `<span>${profile.role === "Student" ? "Grade" : "Department"}: ${escapeHTML(profile.grade || "")}</span><span>Section: ${escapeHTML(profile.section || "")}</span><span>${profile.role === "Student" ? "LRN" : "Employee ID"}: ${escapeHTML(profile.schoolId || "")}</span>` : ""}</div></section></div>`;
   bindModalClose();
-  const fileInput = document.getElementById("profile-photo-input");
   const saveButton = document.getElementById("save-profile-photo");
-  fileInput.addEventListener("change", async () => {
+  const handleProfilePhoto = async fileInput => {
     const file = fileInput.files?.[0];
     if (!file) return;
     saveButton.disabled = true;
@@ -853,7 +858,9 @@ function openProfileModal() {
       fileInput.value = "";
       toast(`Could not load that photo: ${error.message}`);
     }
-  });
+  };
+  document.querySelectorAll("#profile-photo-gallery, #profile-photo-camera")
+    .forEach(input => input.addEventListener("change", () => handleProfilePhoto(input)));
   document.getElementById("profile-photo-form").addEventListener("submit", async event => {
     event.preventDefault();
     const imageData = saveButton.dataset.imageData;
@@ -1486,12 +1493,18 @@ async function cancelUnreceivedQrOrder(order) {
 }
 
 async function restoreCancelledOrderStock(order, button) {
-  if (order.status !== "Cancelled" || !["pending_staff", "manual_review"].includes(order.stockRestorationStatus)) return;
+  const canRestore = order.customerCancelledAt && !order.stockRestorationStatus ||
+    order.stockRestorationStatus === "pending_staff" ||
+    order.stockRestorationStatus === "manual_review";
+  if (order.status !== "Cancelled" || !canRestore) return;
   button.disabled = true;
   try {
     if (realtimeEnabled) {
       const result = await ordersDatabase.ref("orders").child(order.id).transaction(current => {
-        if (!current || current.status !== "Cancelled" || !["pending_staff", "manual_review"].includes(current.stockRestorationStatus)) return;
+        const canRestore = current && current.customerCancelledAt && !current.stockRestorationStatus ||
+          current?.stockRestorationStatus === "pending_staff" ||
+          current?.stockRestorationStatus === "manual_review";
+        if (!current || current.status !== "Cancelled" || !canRestore) return;
         return {
           ...current,
           stockRestorationStatus: "in_progress",
@@ -1552,7 +1565,10 @@ async function restoreCancelledOrderStock(order, button) {
 function staffOrdersContent() {
   const sorted = todayOrders().sort((a, b) => b.createdAt - a.createdAt);
   const pendingStockRestorations = orders.filter(order =>
-    order.status === "Cancelled" && ["pending_staff", "manual_review"].includes(order.stockRestorationStatus)
+    order.status === "Cancelled" && (
+      (order.customerCancelledAt && !order.stockRestorationStatus) ||
+      ["pending_staff", "manual_review"].includes(order.stockRestorationStatus)
+    )
   );
   const restorationQueue = pendingStockRestorations.length
     ? `<div class="panel stock-restoration-queue"><h2>Cancelled orders needing stock return</h2>${pendingStockRestorations.map(order => `<div class="staff-item"><div><strong>Order ${escapeHTML(orderCode(order))}</strong><div class="subtle">${(order.items || []).map(item => `${Number(item.quantity || 0)}× ${escapeHTML(item.name || "Item")}`).join(", ")}</div></div><button class="secondary" data-restore-stock="${escapeHTML(order.id)}">${order.stockRestorationStatus === "manual_review" ? "Retry stock return" : "Restore stock"}</button></div>`).join("")}</div>`
@@ -1689,28 +1705,32 @@ function openMenuEditor(id = "") {
   const item = menu.find(food => food.id === id) || { name: "", category: "Meals", description: "", price: "", stock: 0, tag: "", image: "" };
   const startingStock = Number(item.stock);
   let image = item.image || "";
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div><div class="field"><label for="item-image">Product photo</label><input id="item-image" name="image" type="file" accept="image/*" capture="environment"><img id="item-image-preview" class="menu-image-preview" src="${escapeHTML(image)}" alt="Product photo preview" ${image ? "" : "hidden"}><button class="secondary" id="remove-item-image" type="button" ${image ? "" : "hidden"}>Remove photo</button><span class="field-help">Take a photo or choose one from your device. The image is resized before it is saved.</span></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" value="${item.stock}" required></div></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div><div class="field"><label for="item-image-gallery">Choose a photo from your gallery</label><input id="item-image-gallery" name="image" type="file" accept="image/*"><label for="item-image-camera" class="photo-camera-label">Or take a new photo</label><input id="item-image-camera" type="file" accept="image/*" capture="environment"><img id="item-image-preview" class="menu-image-preview" src="${escapeHTML(image)}" alt="Product photo preview" ${image ? "" : "hidden"}><button class="secondary" id="remove-item-image" type="button" ${image ? "" : "hidden"}>Remove photo</button><span class="field-help">Select an existing album photo or use your camera. The image is resized before it is saved.</span></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" value="${item.stock}" required></div></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
   bindModalClose();
-  const imageInput = document.getElementById("item-image");
   const imagePreview = document.getElementById("item-image-preview");
   const removeImage = document.getElementById("remove-item-image");
-  imageInput.addEventListener("change", async () => {
-    const file = imageInput.files[0];
+  const handleMenuImage = async input => {
+    const file = input.files[0];
     if (!file) return;
     try {
       image = await resizeMenuImage(file);
+      if (input.files?.[0] !== file) return;
       imagePreview.src = image;
       imagePreview.hidden = false;
       removeImage.hidden = false;
     } catch (error) {
       console.error("Unable to process the menu photo.", error);
-      imageInput.value = "";
+      input.value = "";
       toast("Could not load that photo. Please choose another image.");
     }
-  });
+  };
+  const imageInput = document.getElementById("item-image-gallery");
+  document.querySelectorAll("#item-image-gallery, #item-image-camera")
+    .forEach(input => input.addEventListener("change", () => handleMenuImage(input)));
   removeImage.addEventListener("click", () => {
     image = "";
     imageInput.value = "";
+    document.getElementById("item-image-camera").value = "";
     imagePreview.removeAttribute("src");
     imagePreview.hidden = true;
     removeImage.hidden = true;

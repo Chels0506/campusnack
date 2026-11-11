@@ -44,7 +44,7 @@ Each new order receives a short display code (`A001`, `A002`, and so on) from a 
 2. Customers choose **GCash QR**, scan the displayed code from another device or use GCash's QR gallery option, verify the recipient name in GCash, send the exact order amount, then enter the GCash transaction reference before submitting the order.
 3. Staff open **Payments**, compare the submitted amount and reference against the receiver account's GCash transaction history, and click **Confirm received** only after the funds actually appear. If the funds are not visible, **Not received — cancel order** marks the order cancelled and restores its reserved quantities to shared stock. If inventory restoration fails, the app reports that staff must correct the stock manually. Cancellation does not take or refund GCash funds.
 
-Customers can cancel their own orders from **Order history** while the status is still **Received**. The order is cancelled immediately; staff see a stock-return task in the **Orders** tab and restore the reserved quantities there. Orders already being prepared or paid cannot be customer-cancelled. If a customer has sent GCash, cancellation does not issue a refund; staff must handle it separately.
+Customers can cancel their own orders from **Order history** only while the status is **Received**. Once staff change it to **Preparing**, cancellation is unavailable. The order is cancelled immediately; staff see a stock-return task in the **Orders** tab and restore the reserved quantities there. If a customer has sent GCash, cancellation does not issue a refund; staff must handle it separately.
 
 This app does not connect to GCash or verify transfers automatically. Orders paid by QR remain blocked from preparation until staff confirms them. Never treat a customer screenshot alone as proof of payment, and do not upload account passwords, PINs, or other credentials. Use only a QR issued for the canteen's authorized receiving account.
 
@@ -68,6 +68,7 @@ The included rules are a starting point for this demo. The app does not validate
 - Switch to Staff view to see weekly/monthly sales and top product demand, manage shared stock and menu items, and advance orders through received, preparing, ready, and completed.
 - Keep menu edits and stock levels synchronized across signed-in devices through Firebase Realtime Database.
 - In the staff **Menu** tab, add or edit menu photos from a phone camera or photo library, or slide an item's delete control fully and confirm to remove it from the shared menu and stock tracker. Existing orders remain unchanged.
+- Profile picture and product photo forms have separate gallery and camera inputs so mobile users can choose an existing image or take a new one.
 - Share the app link or its QR code from the **Share app** dialog. Share the QR image through the device share sheet when supported, or download it as a PNG.
 - The app QR always points to `https://chels0506.github.io/campusnack/`. After publishing new files to that same URL, existing QR codes open the latest deployed version; app changes still need to be published to the hosting provider.
 - Save menu, profile, cart, and other local demo data in this browser.
