@@ -1,5 +1,5 @@
 self.CAMPUSNACK_FIREBASE_CONFIG = {
-  apiKey: "AIzaSyBGlcGdYC0hsHHElDBQAfHLOpjH_ZKctv40",
+ apiKey: "AIzaSyCUooVv_qWRymGeRylQurrThSnkZn_QXSo",
   authDomain: "campusnack-cf2e5.firebaseapp.com",
   databaseURL: "https://campusnack-cf2e5-default-rtdb.firebaseio.com/",
   projectId: "campusnack-cf2e5",
