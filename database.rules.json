@@ -5,26 +5,59 @@
       ".write": false
     },
     "paymentSettings": {
-      ".read": "auth != null",
+      ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || auth.token.firebase.sign_in_provider === 'password')",
       "gcashQr": {
         ".write": "auth != null && root.child('staffUids').child(auth.uid).val() === true",
         ".validate": "newData.hasChildren(['imageData', 'updatedAt']) && newData.child('imageData').isString() && newData.child('imageData').val().length <= 300000 && newData.child('updatedAt').isNumber()"
       }
     },
+    "customerProfiles": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid && auth.token.firebase.sign_in_provider === 'password'",
+        ".write": "auth != null && auth.uid === $uid && auth.token.firebase.sign_in_provider === 'password'",
+        ".validate": "newData.hasChildren(['id', 'name', 'grade', 'section', 'schoolId', 'role', 'email', 'updatedAt']) && newData.child('id').val() === $uid && newData.child('name').isString() && newData.child('grade').isString() && newData.child('section').isString() && newData.child('schoolId').isString() && ((newData.child('role').val() === 'Student' && newData.child('schoolId').val().matches(/^[0-9]{12}$/) && root.child('studentLrnClaims').child(newData.child('schoolId').val()).val() === $uid) || (newData.child('role').val() === 'Teacher' && newData.child('schoolId').val().matches(/^[0-9]{7}$/) && root.child('teacherEmployeeIdClaims').child(newData.child('schoolId').val()).val() === $uid)) && newData.child('email').isString() && newData.child('updatedAt').isNumber() && (!newData.child('photoData').exists() || (newData.child('photoData').isString() && newData.child('photoData').val().length <= 300000))"
+      }
+    },
+    "profilePhotos": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid && auth.token.firebase.sign_in_provider === 'password'",
+        ".write": "auth != null && auth.uid === $uid && auth.token.firebase.sign_in_provider === 'password'",
+        ".validate": "newData.hasChildren(['imageData', 'updatedAt']) && newData.child('imageData').isString() && newData.child('imageData').val().length <= 300000 && newData.child('updatedAt').isNumber()"
+      }
+    },
+    "studentLrnClaims": {
+      "$lrn": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider === 'password' && (!data.exists() || data.val() === auth.uid)",
+        ".write": "auth != null && auth.token.firebase.sign_in_provider === 'password' && ((!data.exists() && newData.isString() && newData.val() === auth.uid) || (data.val() === auth.uid && newData.val() === auth.uid) || (data.val() === auth.uid && !newData.exists() && !root.child('customerProfiles').child(auth.uid).exists()))",
+        ".validate": "$lrn.matches(/^[0-9]{12}$/) && newData.isString() && newData.val() === auth.uid"
+      }
+    },
+    "teacherEmployeeIdClaims": {
+      "$employeeId": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider === 'password' && (!data.exists() || data.val() === auth.uid)",
+        ".write": "auth != null && auth.token.firebase.sign_in_provider === 'password' && ((!data.exists() && newData.isString() && newData.val() === auth.uid) || (data.val() === auth.uid && newData.val() === auth.uid) || (data.val() === auth.uid && !newData.exists() && !root.child('customerProfiles').child(auth.uid).exists()))",
+        ".validate": "$employeeId.matches(/^[0-9]{7}$/) && newData.isString() && newData.val() === auth.uid"
+      }
+    },
+    "orderCounter": {
+      ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || auth.token.firebase.sign_in_provider === 'password')",
+      ".write": "auth != null && auth.token.firebase.sign_in_provider === 'password' && ((!data.exists() && newData.val() === 1) || (data.isNumber() && newData.isNumber() && newData.val() === data.val() + 1))",
+      ".validate": "newData.isNumber() && newData.val() > 0"
+    },
     "menu": {
-      ".read": "auth != null",
+      ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || auth.token.firebase.sign_in_provider === 'password')",
       "$itemId": {
-        ".write": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || (data.exists() && newData.exists() && data.child('stock').isNumber() && newData.child('stock').isNumber() && newData.child('stock').val() >= 0 && newData.child('stock').val() < data.child('stock').val() && newData.child('id').val() === data.child('id').val() && newData.child('name').val() === data.child('name').val() && newData.child('category').val() === data.child('category').val() && newData.child('description').val() === data.child('description').val() && newData.child('price').val() === data.child('price').val() && newData.child('points').val() === data.child('points').val() && newData.child('emoji').val() === data.child('emoji').val() && newData.child('tag').val() === data.child('tag').val() && newData.child('image').val() === data.child('image').val() && newData.child('sortOrder').val() === data.child('sortOrder').val()))",
-        ".validate": "newData.hasChildren(['id', 'name', 'category', 'description', 'price', 'points', 'stock', 'emoji', 'tag', 'sortOrder']) && newData.child('id').val() === $itemId && newData.child('price').isNumber() && newData.child('points').isNumber() && newData.child('stock').isNumber() && newData.child('stock').val() >= 0"
+        ".write": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || (auth.token.firebase.sign_in_provider === 'password' && data.exists() && newData.exists() && data.child('stock').isNumber() && newData.child('stock').isNumber() && newData.child('stock').val() >= 0 && newData.child('stock').val() < data.child('stock').val() && newData.child('id').val() === data.child('id').val() && newData.child('name').val() === data.child('name').val() && newData.child('category').val() === data.child('category').val() && newData.child('description').val() === data.child('description').val() && newData.child('price').val() === data.child('price').val() && newData.child('tag').val() === data.child('tag').val() && newData.child('image').val() === data.child('image').val() && newData.child('sortOrder').val() === data.child('sortOrder').val()))",
+        ".validate": "newData.hasChildren(['id', 'name', 'category', 'description', 'price', 'stock', 'tag', 'sortOrder']) && newData.child('id').val() === $itemId && newData.child('price').isNumber() && newData.child('stock').isNumber() && newData.child('stock').val() >= 0 && (!newData.child('image').exists() || (newData.child('image').isString() && newData.child('image').val().length <= 300000))"
       }
     },
     "orders": {
       ".indexOn": ["owner"],
-      ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || (query.orderByChild === 'owner' && query.equalTo === auth.uid))",
+      ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || (auth.token.firebase.sign_in_provider === 'password' && query.orderByChild === 'owner' && query.equalTo === auth.uid))",
       "$orderId": {
-        ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || data.child('owner').val() === auth.uid)",
-        ".write": "auth != null && ((!data.exists() && newData.child('owner').val() === auth.uid && newData.child('status').val() === 'Received' && newData.child('paymentStatus').val() !== 'paid' && ((newData.child('payment').val() === 'QR' && newData.child('paymentStatus').val() === 'pending_review' && newData.child('paymentReference').isString() && newData.child('paymentReference').val().length > 0) || (newData.child('payment').val() !== 'QR' && newData.child('paymentStatus').val() === 'not_required'))) || (root.child('staffUids').child(auth.uid).val() === true && newData.exists()))",
-        ".validate": "newData.hasChildren(['id', 'owner', 'customer', 'items', 'total', 'points', 'payment', 'status', 'createdAt']) && newData.child('id').val() === $orderId && (newData.child('status').val() === 'Received' || newData.child('status').val() === 'Preparing' || newData.child('status').val() === 'Ready for pickup' || newData.child('status').val() === 'Completed') && (!newData.child('paymentStatus').exists() || newData.child('paymentStatus').val() === 'pending_review' || newData.child('paymentStatus').val() === 'paid' || newData.child('paymentStatus').val() === 'not_required') && (!newData.child('paymentReference').exists() || (newData.child('paymentReference').isString() && newData.child('paymentReference').val().length <= 80))"
+        ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || (auth.token.firebase.sign_in_provider === 'password' && data.child('owner').val() === auth.uid))",
+        ".write": "auth != null && ((auth.token.firebase.sign_in_provider === 'password' && !data.exists() && newData.child('owner').val() === auth.uid && newData.child('status').val() === 'Received' && newData.child('paymentStatus').val() !== 'paid' && ((newData.child('payment').val() === 'QR' && newData.child('paymentStatus').val() === 'pending_review' && newData.child('paymentReference').isString() && newData.child('paymentReference').val().length > 0) || (newData.child('payment').val() !== 'QR' && newData.child('paymentStatus').val() === 'not_required'))) || (auth.token.firebase.sign_in_provider === 'password' && data.exists() && data.child('owner').val() === auth.uid && data.child('status').val() === 'Received' && data.child('paymentStatus').val() !== 'paid' && newData.child('status').val() === 'Cancelled' && newData.child('id').val() === data.child('id').val() && newData.child('owner').val() === data.child('owner').val() && newData.child('customer').val() === data.child('customer').val() && newData.child('grade').val() === data.child('grade').val() && newData.child('section').val() === data.child('section').val() && newData.child('items').val() === data.child('items').val() && newData.child('total').val() === data.child('total').val() && newData.child('points').val() === data.child('points').val() && newData.child('payment').val() === data.child('payment').val() && newData.child('walletDiscount').val() === data.child('walletDiscount').val() && newData.child('pointsUsed').val() === data.child('pointsUsed').val() && newData.child('createdAt').val() === data.child('createdAt').val() && newData.child('paymentStatus').val() === data.child('paymentStatus').val() && newData.child('paymentReference').val() === data.child('paymentReference').val() && newData.child('displayId').val() === data.child('displayId').val() && newData.child('stockRestorationStatus').val() === 'pending_staff') || (root.child('staffUids').child(auth.uid).val() === true && newData.exists()))",
+        ".validate": "newData.hasChildren(['id', 'owner', 'customer', 'items', 'total', 'points', 'payment', 'status', 'createdAt']) && newData.child('id').val() === $orderId && (newData.child('status').val() === 'Received' || newData.child('status').val() === 'Preparing' || newData.child('status').val() === 'Ready for pickup' || newData.child('status').val() === 'Completed' || newData.child('status').val() === 'Cancelled') && (!newData.child('paymentStatus').exists() || newData.child('paymentStatus').val() === 'pending_review' || newData.child('paymentStatus').val() === 'paid' || newData.child('paymentStatus').val() === 'not_required' || newData.child('paymentStatus').val() === 'not_received') && (!newData.child('paymentReference').exists() || (newData.child('paymentReference').isString() && newData.child('paymentReference').val().length <= 80)) && (!newData.child('paymentReviewedAt').exists() || newData.child('paymentReviewedAt').isNumber()) && (!newData.child('paymentReviewedBy').exists() || newData.child('paymentReviewedBy').isString()) && (!newData.child('customerCancelledAt').exists() || newData.child('customerCancelledAt').isNumber()) && (!newData.child('stockRestorationStatus').exists() || newData.child('stockRestorationStatus').val() === 'pending_staff' || newData.child('stockRestorationStatus').val() === 'in_progress' || newData.child('stockRestorationStatus').val() === 'complete' || newData.child('stockRestorationStatus').val() === 'manual_review')"
       }
     }
   }

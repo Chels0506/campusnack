@@ -11,15 +11,15 @@ const APP_PUBLIC_URL = "https://chels0506.github.io/campusnack/";
 const firebaseConfig = window.CAMPUSNACK_FIREBASE_CONFIG || {};
 const statuses = ["Received", "Preparing", "Ready for pickup", "Completed"];
 const initialMenu = [
-  { id: "chicken-meal", name: "Crispy Chicken Meal", category: "Meals", description: "Golden chicken, rice & gravy", price: 85, points: 8, stock: 18, emoji: "🍗", tag: "Canteen favorite" },
-  { id: "pork-silog", name: "Porksilog", category: "Rice dishes", description: "Savory pork, egg & garlic rice", price: 75, points: 7, stock: 14, emoji: "🍳", tag: "Bestseller" },
-  { id: "pancit", name: "Pancit Canton", category: "Meals", description: "Noodles with veggies & chicken", price: 55, points: 5, stock: 10, emoji: "🍜", tag: "Made fresh" },
-  { id: "banana-cue", name: "Banana Cue", category: "Snacks", description: "Sweet saba, caramelized just right", price: 20, points: 2, stock: 22, emoji: "🍌", tag: "Sweet treat" },
-  { id: "siomai", name: "Pork Siomai (4 pcs)", category: "Snacks", description: "Steamed bites with chili garlic", price: 35, points: 3, stock: 25, emoji: "🥟", tag: "" },
-  { id: "iced-tea", name: "House Iced Tea", category: "Drinks", description: "Cool, refreshing & not too sweet", price: 18, points: 2, stock: 30, emoji: "🧋", tag: "" },
-  { id: "bistek", name: "Beef Tapa", category: "Rice dishes", description: "Tender tapa with sunny-side egg", price: 90, points: 9, stock: 8, emoji: "🥩", tag: "Staff pick" },
-  { id: "water", name: "Bottled Water", category: "Drinks", description: "Stay refreshed through the day", price: 15, points: 1, stock: 36, emoji: "💧", tag: "" },
-  { id: "lumpia", name: "Fresh Lumpia", category: "Snacks", description: "Crisp and crunchy veggie rolls", price: 30, points: 3, stock: 12, emoji: "🥠", tag: "" }
+  { id: "chicken-meal", name: "Crispy Chicken Meal", category: "Meals", description: "Golden chicken, rice & gravy", price: 85, stock: 18, tag: "Canteen favorite" },
+  { id: "pork-silog", name: "Porksilog", category: "Rice dishes", description: "Savory pork, egg & garlic rice", price: 75, stock: 14, tag: "Bestseller" },
+  { id: "pancit", name: "Pancit Canton", category: "Meals", description: "Noodles with veggies & chicken", price: 55, stock: 10, tag: "Made fresh" },
+  { id: "banana-cue", name: "Banana Cue", category: "Snacks", description: "Sweet saba, caramelized just right", price: 20, stock: 22, tag: "Sweet treat" },
+  { id: "siomai", name: "Pork Siomai (4 pcs)", category: "Snacks", description: "Steamed bites with chili garlic", price: 35, stock: 25, tag: "" },
+  { id: "iced-tea", name: "House Iced Tea", category: "Drinks", description: "Cool, refreshing & not too sweet", price: 18, stock: 30, tag: "" },
+  { id: "bistek", name: "Beef Tapa", category: "Rice dishes", description: "Tender tapa with sunny-side egg", price: 90, stock: 8, tag: "Staff pick" },
+  { id: "water", name: "Bottled Water", category: "Drinks", description: "Stay refreshed through the day", price: 15, stock: 36, tag: "" },
+  { id: "lumpia", name: "Fresh Lumpia", category: "Snacks", description: "Crisp and crunchy veggie rolls", price: 30, stock: 12, tag: "" }
 ];
 const read = (key, fallback) => {
   try {
@@ -30,6 +30,10 @@ const read = (key, fallback) => {
     return fallback;
   }
 };
+const cleanMenuItem = item => {
+  const { points, emoji, ...clean } = item || {};
+  return clean;
+};
 const write = (key, value) => {
   try {
     localStorage.setItem(key, JSON.stringify(value));
@@ -38,7 +42,7 @@ const write = (key, value) => {
     toast("Could not save your changes on this device.");
   }
 };
-let menu = read(STORAGE.menu, initialMenu);
+let menu = read(STORAGE.menu, initialMenu).filter(Boolean).map(cleanMenuItem);
 let orders = read(STORAGE.orders, []);
 let profile = read(STORAGE.profile, null);
 let likes = new Set(read(STORAGE.likes, []));
@@ -89,7 +93,7 @@ const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({
 }[char]));
 const money = amount => `₱${Number(amount).toFixed(2)}`;
 const orderCode = order => order.displayId || order.id;
-const pointsToPeso = points => Number(points) / 10;
+const pointsToPeso = points => Number(points) / 25;
 const dateKey = value => {
   const date = new Date(value);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -99,11 +103,11 @@ const customerOrders = () => orders.filter(order => order.owner === profile?.id)
 const currentPoints = () => Math.max(0,
   Number(profile?.points || 0) +
   customerOrders().filter(order => order.status === "Completed").reduce((sum, order) => sum + Number(order.points || 0), 0) -
-  customerOrders().reduce((sum, order) => sum + Number(order.pointsUsed || 0), 0)
+  customerOrders().filter(order => order.status !== "Cancelled").reduce((sum, order) => sum + Number(order.pointsUsed || 0), 0)
 );
 const walletBalanceInfo = total => {
   const availablePoints = currentPoints();
-  const pointsUsed = Math.min(availablePoints, Math.floor((total + Number.EPSILON) * 10));
+  const pointsUsed = Math.min(availablePoints, Math.floor((total + Number.EPSILON) * 25));
   const discount = pointsToPeso(pointsUsed);
   return { availablePoints, discount, pointsUsed, canUseWallet: pointsUsed > 0 };
 };
@@ -262,6 +266,10 @@ function renderLogin(selectedRole = "Student") {
       const credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
       if (role === "Staff") {
         profile = { id: credential.user.uid, name, email, schoolId, role, points: 0 };
+        if (realtimeEnabled) {
+          const photoSnapshot = await ordersDatabase.ref("profilePhotos").child(credential.user.uid).once("value");
+          profile.photoData = photoSnapshot.val()?.imageData || "";
+        }
         write(STORAGE.profile, profile);
         connectOrderSync();
         render();
@@ -413,6 +421,7 @@ function connectOrderSync() {
     if (values) {
       menu = (Array.isArray(values) ? values : Object.values(values))
         .filter(Boolean)
+        .map(cleanMenuItem)
         .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
       write(STORAGE.menu, menu);
       if (profile) render();
@@ -453,7 +462,7 @@ function connectOrderSync() {
 function renderCustomer() {
   const name = escapeHTML(profile.name);
   const initial = name.charAt(0).toUpperCase() || "?";
-  const content = customerTab === "Menu" ? customerMenuContent() : customerTab === "Orders" ? customerOrdersContent() : profileContent();
+  const content = customerTab === "Menu" ? customerMenuContent() : customerOrdersContent();
   document.getElementById("app").innerHTML = `
     <div class="app-shell">
       <header class="topbar">
@@ -462,7 +471,7 @@ function renderCustomer() {
           <button class="share-button" data-install-app aria-label="Add to Home Screen" type="button">＋ Add to Home Screen</button>
           <button class="share-button" data-share-app type="button">▦ Share app</button>
           <button class="icon-button" id="logout" title="Sign out">Sign out</button>
-          <div class="user-chip"><span class="avatar">${initial}</span><span class="user-name">${name}</span></div>
+          <button class="user-chip profile-trigger" type="button" data-open-profile aria-label="Open profile for ${name}"><span class="avatar">${profile.photoData ? `<img src="${escapeHTML(profile.photoData)}" alt="">` : initial}</span><span class="user-name">${name}</span></button>
         </div>
       </header>
       <main class="page">
@@ -472,7 +481,7 @@ function renderCustomer() {
             ${content}
           </section>
           <aside class="sidebar">
-            ${customerTab === "Menu" ? cartContent() : `<div class="panel"><div class="reward-card"><div><h3>Your rewards</h3><p>${currentPoints()} points ready to earn</p></div><span class="reward-emoji">🎁</span></div><p class="footer-note">Earn points with each completed order. Your order history and rewards stay on this device.</p></div>`}
+            ${customerTab === "Menu" ? cartContent() : `<div class="panel"><div class="reward-card"><div><h3>Your rewards</h3><p>${currentPoints()} points in your wallet</p></div><span class="reward-emoji">🎁</span></div><p class="footer-note">Earn 1 point per ₱10 in your order total when it is completed. Redeem 25 points for ₱1 off.</p></div>`}
             <div class="panel"><h2>Lunch, made easier</h2><p class="subtle" style="font-size:12px;line-height:1.6;margin:0">Place your order ahead and pick it up at the canteen counter. Your order status updates here.</p></div>
           </aside>
         </div>
@@ -480,6 +489,7 @@ function renderCustomer() {
       ${modalMarkup()}
     </div>`;
   document.getElementById("logout").addEventListener("click", logout);
+  document.querySelector("[data-open-profile]")?.addEventListener("click", openProfileModal);
   bindShareApp();
   bindInstallApp();
   document.querySelectorAll("[data-customer-tab]").forEach(button => button.addEventListener("click", () => { customerTab = button.dataset.customerTab; render(); }));
@@ -508,6 +518,7 @@ function renderCustomer() {
   });
   document.getElementById("checkout")?.addEventListener("click", checkout);
   document.querySelectorAll("[data-track]").forEach(button => button.addEventListener("click", () => openTracker(button.dataset.track)));
+  document.querySelectorAll("[data-cancel-order]").forEach(button => button.addEventListener("click", () => cancelCustomerOrder(button.dataset.cancelOrder, button)));
   bindModalClose();
 }
 
@@ -518,7 +529,7 @@ function customerMenuContent() {
     `${item.name} ${item.description}`.toLowerCase().includes(query.toLowerCase())
   );
   return `
-    <nav class="bottom-nav">${["Menu", "Orders", "Profile"].map(tab => `<button class="nav-tab ${customerTab === tab ? "active" : ""}" data-customer-tab="${tab}">${tab}</button>`).join("")}</nav>
+    <nav class="bottom-nav">${["Menu", "Orders"].map(tab => `<button class="nav-tab ${customerTab === tab ? "active" : ""}" data-customer-tab="${tab}">${tab}</button>`).join("")}</nav>
     <div class="hero"><div><div class="eyebrow">Made fresh, just for you</div><h2>A little break. A really good bite.</h2><p>Order ahead and make your break count.</p></div><div class="hero-food" aria-hidden="true">🍛</div></div>
     <div class="section-heading"><h2>Today's menu</h2><input class="search" id="menu-search" value="${escapeHTML(query)}" placeholder="⌕  Search menu" aria-label="Search menu"></div>
     <div class="categories">${categories.map(item => `<button class="category ${category === item ? "active" : ""}" data-category="${item}">${item}</button>`).join("")}</div>
@@ -527,15 +538,15 @@ function customerMenuContent() {
 
 function foodCard(item) {
   return `<article class="food-card">
-    <div class="food-art">${item.image ? `<img src="${escapeHTML(item.image)}" alt="${escapeHTML(item.name)}">` : `<span>${escapeHTML(item.emoji)}</span>`}${item.tag ? `<span class="tag">${escapeHTML(item.tag)}</span>` : ""}<button class="like ${likes.has(item.id) ? "liked" : ""}" data-like="${escapeHTML(item.id)}" aria-label="${likes.has(item.id) ? "Unlike" : "Like"} ${escapeHTML(item.name)}">${likes.has(item.id) ? "♥" : "♡"}</button></div>
-    <div class="food-info"><h3>${escapeHTML(item.name)}</h3><p class="description">${escapeHTML(item.description)}</p><div class="food-bottom"><div><span class="price">${money(item.price)}</span><span class="food-points">✦ ${item.points} points</span></div><button class="add-btn" data-add="${escapeHTML(item.id)}" aria-label="${item.stock < 1 ? `${escapeHTML(item.name)} is sold out` : `Add ${escapeHTML(item.name)} to cart`}" ${item.stock < 1 ? "disabled" : ""}>${item.stock < 1 ? "Sold out" : "+ Add"}</button></div></div>
+    <div class="food-art">${item.image ? `<img src="${escapeHTML(item.image)}" alt="${escapeHTML(item.name)}">` : `<span aria-hidden="true">🍽️</span>`}${item.tag ? `<span class="tag">${escapeHTML(item.tag)}</span>` : ""}<button class="like ${likes.has(item.id) ? "liked" : ""}" data-like="${escapeHTML(item.id)}" aria-label="${likes.has(item.id) ? "Unlike" : "Like"} ${escapeHTML(item.name)}">${likes.has(item.id) ? "♥" : "♡"}</button></div>
+    <div class="food-info"><h3>${escapeHTML(item.name)}</h3><p class="description">${escapeHTML(item.description)}</p><div class="food-bottom"><span class="price">${money(item.price)}</span><button class="add-btn" data-add="${escapeHTML(item.id)}" aria-label="${item.stock < 1 ? `${escapeHTML(item.name)} is sold out` : `Add ${escapeHTML(item.name)} to cart`}" ${item.stock < 1 ? "disabled" : ""}>${item.stock < 1 ? "Sold out" : "+ Add"}</button></div></div>
   </article>`;
 }
 
 function cartContent() {
   const entries = Object.entries(cart).filter(([, quantity]) => quantity > 0);
   const total = entries.reduce((sum, [id, quantity]) => sum + (menu.find(item => item.id === id)?.price || 0) * quantity, 0);
-  const earned = entries.reduce((sum, [id, quantity]) => sum + (menu.find(item => item.id === id)?.points || 0) * quantity, 0);
+  const earned = Math.floor((total + Number.EPSILON) / 10);
   const wallet = walletBalanceInfo(total);
   if (payment === "Wallet" && !wallet.canUseWallet) payment = "Cash";
   return `<div class="panel"><h2>Your order <span style="color:#92988f;font-size:12px;font-weight:500">${entries.reduce((sum, [, count]) => sum + count, 0)} items</span></h2>
@@ -546,9 +557,9 @@ function cartContent() {
     }).join("") : `<div class="cart-empty"><span>🛍️</span>Your cart is waiting for something tasty.</div>`}
     <div class="cart-total"><span>Total</span><span>${money(total)}</span></div>
     ${payment === "Wallet" && wallet.canUseWallet ? `<div class="cart-total"><span>Points discount · ${wallet.pointsUsed} pts</span><span>−${money(wallet.discount)}</span></div><div class="cart-total"><strong>After points discount</strong><strong>${money(Math.max(0, total - wallet.discount))}</strong></div>` : ""}
-    <div class="cart-reward">✦ You'll earn ${earned} points with this order</div>
+    <div class="cart-reward">✦ ${earned} point${earned === 1 ? "" : "s"} for this order · 1 point per ₱10, added when completed</div>
     <div class="payment-label">Choose how to pay</div><div class="payment-options">${["Wallet", "QR", "Cash"].map(method => `<button class="payment-option ${payment === method ? "active" : ""}" data-payment="${method}" ${method === "Wallet" && !wallet.canUseWallet ? "disabled title=\"Earn points from completed orders before using Wallet\"" : method === "QR" && !gcashQr?.imageData ? "disabled title=\"The canteen has not added a GCash QR yet\"" : ""}>${method === "Wallet" ? "◉ Wallet" : method === "QR" ? "▦ GCash QR" : "▤ Cash"}</button>`).join("")}</div>
-    ${payment === "Wallet" ? `<div class="payment-label" style="margin-top:8px">Wallet points: ${wallet.availablePoints} pts · ${money(pointsToPeso(wallet.availablePoints))} available. Applying ${wallet.pointsUsed} pts (${money(wallet.discount)} discount). 50 points = ₱5.00. Demo only; no actual money is charged.</div>` : ""}
+    ${payment === "Wallet" ? `<div class="payment-label" style="margin-top:8px">Wallet points: ${wallet.availablePoints} pts · ${money(pointsToPeso(wallet.availablePoints))} available. Applying ${wallet.pointsUsed} pts (${money(wallet.discount)} discount). 25 points = ₱1.00. Demo only; no actual money is charged.</div>` : ""}
     ${payment === "QR" ? gcashQr?.imageData ? `<div class="gcash-payment"><p>Scan this GCash QR using another device, or save the image and use GCash's QR gallery option. Verify the recipient name in GCash before sending <strong>${money(total)}</strong>.</p><img src="${escapeHTML(gcashQr.imageData)}" alt="Canteen GCash payment QR code"><label for="gcash-payment-reference">GCash reference number</label><input id="gcash-payment-reference" type="text" maxlength="80" autocomplete="off" placeholder="Enter the reference number after paying" value="${escapeHTML(paymentReference)}"><small>Staff will check the transfer in GCash before confirming your order. Do not send money if the displayed recipient is incorrect.</small></div>` : `<div class="payment-label">The canteen has not set up a GCash QR code yet. Please choose another payment method.</div>` : ""}
     <button class="primary" id="checkout" style="margin-top:15px" ${entries.length && (payment !== "QR" || paymentReference.trim()) ? "" : "disabled"}>${payment === "QR" ? "I sent payment · " : "Place order · "}${money(payment === "Wallet" ? Math.max(0, total - wallet.discount) : total)}</button>
   </div>`;
@@ -556,18 +567,20 @@ function cartContent() {
 
 function customerOrdersContent() {
   const list = customerOrders();
-  return `<nav class="bottom-nav">${["Menu", "Orders", "Profile"].map(tab => `<button class="nav-tab ${customerTab === tab ? "active" : ""}" data-customer-tab="${tab}">${tab}</button>`).join("")}</nav>
+  return `<nav class="bottom-nav">${["Menu", "Orders"].map(tab => `<button class="nav-tab ${customerTab === tab ? "active" : ""}" data-customer-tab="${tab}">${tab}</button>`).join("")}</nav>
     <div class="section-heading"><div><div class="eyebrow">Your canteen activity</div><h2>Order history</h2></div></div>
-    ${list.length ? `<div class="order-list">${list.map(order => `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(orderCode(order))}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status ${order.status === "Cancelled" ? "order-cancelled" : ""}">${escapeHTML(order.status)}</span></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">GCash transfer reported · awaiting staff verification</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">GCash payment confirmed by staff</p>` : order.paymentStatus === "not_received" ? `<p class="payment-review-note">Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "The order was cancelled and stock returned." : order.stockRestorationStatus === "manual_review" ? "The order was cancelled; staff is correcting stock." : "The order was cancelled and stock is being restored."}</p>` : ""}<div style="font-size:12px;color:#657168">${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${order.points} pts</strong><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button></div>${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}</article>`).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
-}
-
-function profileContent() {
-  return `<nav class="bottom-nav">${["Menu", "Orders", "Profile"].map(tab => `<button class="nav-tab ${customerTab === tab ? "active" : ""}" data-customer-tab="${tab}">${tab}</button>`).join("")}</nav>
-    <div class="section-heading"><div><div class="eyebrow">Your account</div><h2>My profile</h2></div></div>
-    <div class="panel"><div class="user-chip" style="margin-bottom:20px"><span class="avatar" style="width:48px;height:48px">${escapeHTML(profile.name.charAt(0).toUpperCase())}</span><div><strong>${escapeHTML(profile.name)}</strong><div class="subtle" style="font-size:12px">${escapeHTML(profile.role)}</div></div></div>
-    <div class="profile-grid"><div class="stat-card"><span>Grade / department</span><strong style="font-size:15px">${escapeHTML(profile.grade)}</strong></div><div class="stat-card"><span>Section</span><strong style="font-size:15px">${escapeHTML(profile.section)}</strong></div><div class="stat-card"><span>${profile.role === "Student" ? "LRN" : "School ID"}</span><strong style="font-size:15px">${escapeHTML(profile.schoolId)}</strong></div></div>
-    <p class="footer-note">Profile information is stored locally in this browser. Sign out to return to the role selection screen.</p></div>
-    <div class="panel"><div class="reward-card"><div><h3>Good choices add up</h3><p>You've collected ${currentPoints()} canteen points.</p></div><span class="reward-emoji">✨</span></div></div>`;
+    ${list.length ? `<div class="order-list">${list.map(order => {
+      const message = order.customerCancelledAt
+        ? `${order.stockRestorationStatus === "complete" ? "Reserved stock was returned." : order.stockRestorationStatus === "manual_review" ? "Stock return needs staff review." : "Canteen staff will return the reserved stock."}${order.payment === "QR" && order.paymentStatus === "pending_review" ? " If you sent GCash, contact staff; refunds are not automatic." : ""}`
+        : order.paymentStatus === "pending_review"
+          ? "GCash transfer reported · awaiting staff verification"
+          : order.paymentStatus === "paid"
+            ? "GCash payment confirmed by staff"
+            : order.paymentStatus === "not_received"
+              ? `Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "Stock was returned." : order.stockRestorationStatus === "manual_review" ? "Stock return needs staff review." : "Stock is being returned."}`
+              : "";
+      return `<article class="order-card"><div class="order-card-top"><div><strong>Order ${escapeHTML(orderCode(order))}</strong><p class="subtle" style="font-size:11px;margin:5px 0">${new Date(order.createdAt).toLocaleString()} · ${escapeHTML(order.payment)}</p></div><span class="order-status ${order.status === "Cancelled" ? "order-cancelled" : ""}">${escapeHTML(order.status)}</span></div>${message ? `<p class="${order.paymentStatus === "paid" ? "payment-confirmed-note" : "payment-review-note"}">${escapeHTML(message)}</p>` : ""}<div style="font-size:12px;color:#657168">${(order.items || []).map(item => `${Number(item.quantity || 0)}× ${escapeHTML(item.name || "Item")}`).join(", ")}</div><div class="order-card-top" style="margin-top:12px"><strong>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? ` after ${money(order.walletDiscount)} points discount` : ""} · ✦ ${Number(order.points || 0)} pts</strong><div class="order-actions"><button class="secondary" data-track="${escapeHTML(order.id)}">Track order</button>${order.status === "Received" && order.paymentStatus !== "paid" ? `<button class="secondary cancel-order-button" data-cancel-order="${escapeHTML(order.id)}">Cancel order</button>` : ""}</div></div>${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}</article>`;
+    }).join("")}</div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>Your orders will show up here once you place one.</div>`}`;
 }
 
 async function changeSharedStock(id, amount) {
@@ -599,6 +612,92 @@ async function nextOrderCode() {
   return `A${String(sequence).padStart(3, "0")}`;
 }
 
+async function cancelCustomerOrder(orderId, button) {
+  const order = customerOrders().find(item => item.id === orderId);
+  if (!order || order.status !== "Received" || order.paymentStatus === "paid") return;
+  const stockNotice = realtimeEnabled
+    ? "Canteen staff will return the reserved products to stock."
+    : "The reserved products will be returned to stock.";
+  const paymentWarning = order.payment === "QR"
+    ? "\n\nIf you already sent GCash, the app cannot automatically refund it. Contact the canteen staff to arrange a refund."
+    : "";
+  if (!window.confirm(`Cancel order ${orderCode(order)}? ${stockNotice}${paymentWarning}`)) return;
+  if (button) button.disabled = true;
+  const cancelledAt = Date.now();
+  let cancellationCommitted = false;
+  try {
+    if (realtimeEnabled) {
+      const result = await ordersDatabase.ref("orders").child(order.id).transaction(current => {
+        if (!current || current.owner !== profile.id || current.status !== "Received" || current.paymentStatus === "paid") return;
+        return {
+          ...current,
+          status: "Cancelled",
+          customerCancelledAt: cancelledAt,
+          stockRestorationStatus: "pending_staff",
+          stockRestoredItemIds: []
+        };
+      }, undefined, false);
+      if (!result.committed) {
+        toast("This order has already started or changed and can no longer be cancelled.");
+        return;
+      }
+      Object.assign(order, result.snapshot.val());
+      cancellationCommitted = true;
+      toast(`Order ${orderCode(order)} cancelled. Canteen staff will restore the reserved stock.`);
+      return;
+    } else {
+      order.status = "Cancelled";
+      order.customerCancelledAt = cancelledAt;
+      order.stockRestorationStatus = "in_progress";
+      order.stockRestoredItemIds = [];
+      cancellationCommitted = true;
+      write(STORAGE.orders, orders);
+    }
+
+    for (const item of order.items || []) {
+      if ((order.stockRestoredItemIds || []).includes(item.id)) continue;
+      const menuItem = menu.find(food => food.id === item.id);
+      if (!menuItem) throw new Error(`The product ${item.name} is missing from local stock.`);
+      menuItem.stock += Number(item.quantity);
+      order.stockRestoredItemIds = [...(order.stockRestoredItemIds || []), item.id];
+      write(STORAGE.menu, menu);
+      write(STORAGE.orders, orders);
+    }
+    order.stockRestorationStatus = "complete";
+    toast(`Order ${orderCode(order)} cancelled. Reserved stock was returned.`);
+  } catch (error) {
+    if (!cancellationCommitted && realtimeEnabled) {
+      try {
+        const latest = (await ordersDatabase.ref("orders").child(order.id).once("value")).val();
+        if (latest?.owner === profile.id && latest.status === "Cancelled") {
+          Object.assign(order, latest);
+          cancellationCommitted = true;
+        }
+      } catch (refreshError) {
+        console.error(`Unable to confirm cancellation state for order ${order.id}.`, refreshError);
+      }
+    }
+    if (!cancellationCommitted) {
+      console.error(`Unable to cancel order ${order.id}.`, error);
+      toast("Order could not be cancelled. Check your connection and try again.");
+      return;
+    }
+    console.error(`Unable to cancel or restore stock for order ${order.id}.`, error);
+    order.stockRestorationStatus = "manual_review";
+    if (!realtimeEnabled) write(STORAGE.orders, orders);
+    else {
+      try {
+        await ordersDatabase.ref("orders").child(order.id).update({ stockRestorationStatus: "manual_review" });
+      } catch (statusError) {
+        console.error(`Unable to record stock-restoration failure for order ${order.id}.`, statusError);
+      }
+    }
+    toast(`Order ${orderCode(order)} was cancelled, but stock restoration failed. Please contact canteen staff.`);
+  } finally {
+    render();
+  }
+}
+
 async function checkout() {
   const entries = Object.entries(cart).filter(([, count]) => count > 0);
   if (!entries.length) return;
@@ -615,7 +714,7 @@ async function checkout() {
       const snapshot = await ordersDatabase.ref("menu").once("value");
       const values = snapshot.val();
       if (!values) throw new Error("The shared menu has not been published by staff yet.");
-      menu = (Array.isArray(values) ? values : Object.values(values)).filter(Boolean);
+      menu = (Array.isArray(values) ? values : Object.values(values)).filter(Boolean).map(cleanMenuItem);
       write(STORAGE.menu, menu);
     }
 
@@ -659,7 +758,7 @@ async function checkout() {
       section: profile.section,
       items,
       total: Number(total.toFixed(2)),
-      points: entries.reduce((sum, [id, quantity]) => sum + menu.find(food => food.id === id).points * quantity, 0),
+      points: Math.floor((total + Number.EPSILON) / 10),
       payment: payment === "Wallet" ? `Wallet (${wallet.pointsUsed} points)` : payment,
       walletDiscount,
       pointsUsed: payment === "Wallet" ? wallet.pointsUsed : 0,
@@ -706,7 +805,7 @@ async function checkout() {
 function openTracker(orderId) {
   const order = customerOrders().find(item => item.id === orderId);
   if (!order) return;
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="tracker-title"><div class="modal-head">  <h2 id="tracker-title">Track your order</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle" style="margin:9px 0">Order ${escapeHTML(orderCode(order))}</p><div class="tracker-box"><div style="font-size:30px;margin-bottom:8px">🍱</div><strong>${escapeHTML(order.status)}</strong><p class="subtle" style="font-size:12px;margin:5px 0 0">${order.status === "Ready for pickup" ? "Head to the canteen counter when you're ready." : order.status === "Completed" ? "Enjoy your meal! Points are in your rewards." : order.status === "Cancelled" ? "This order was cancelled because the GCash transfer could not be confirmed. No payment was automatically taken or refunded." : "The canteen team is working on your order."}</p></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">Your GCash reference ${escapeHTML(order.paymentReference || "")} is waiting for staff to verify the transfer.</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">Staff confirmed your GCash payment.</p>` : order.paymentStatus === "not_received" ? `<p class="payment-review-note">Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "Stock was returned." : order.stockRestorationStatus === "manual_review" ? "Staff is correcting stock." : "Stock is being restored."}</p>` : ""}${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}<p class="footer-note">${realtimeEnabled ? "Order status syncs in real time with the canteen." : "This tracker updates when the canteen updates your order on this device."}</p></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="tracker-title"><div class="modal-head">  <h2 id="tracker-title">Track your order</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle" style="margin:9px 0">Order ${escapeHTML(orderCode(order))}</p><div class="tracker-box"><div style="font-size:30px;margin-bottom:8px">🍱</div><strong>${escapeHTML(order.status)}</strong><p class="subtle" style="font-size:12px;margin:5px 0 0">${order.status === "Ready for pickup" ? "Head to the canteen counter when you're ready." : order.status === "Completed" ? "Enjoy your meal! Points are in your rewards." : order.status === "Cancelled" ? order.customerCancelledAt ? "You cancelled this order. Canteen staff will return the reserved stock; GCash refunds are not automatic." : "This order was cancelled because the GCash transfer could not be confirmed. No payment was automatically taken or refunded." : "The canteen team is working on your order."}</p></div>${order.paymentStatus === "pending_review" ? `<p class="payment-review-note">Your GCash reference ${escapeHTML(order.paymentReference || "")} is waiting for staff to verify the transfer.</p>` : order.paymentStatus === "paid" ? `<p class="payment-confirmed-note">Staff confirmed your GCash payment.</p>` : order.paymentStatus === "not_received" ? `<p class="payment-review-note">Staff could not confirm the transfer. ${order.stockRestorationStatus === "complete" ? "Stock was returned." : order.stockRestorationStatus === "manual_review" ? "Staff is correcting stock." : "Stock is being restored."}</p>` : ""}${order.status === "Cancelled" ? "" : `<div class="order-progress">${statuses.map((status, index) => `<span class="${index <= statuses.indexOf(order.status) ? "done" : ""}" title="${status}"></span>`).join("")}</div>`}<p class="footer-note">${realtimeEnabled ? "Order status syncs in real time with the canteen." : "This tracker updates when the canteen updates your order on this device."}</p></section></div>`;
   bindModalClose();
 }
 
@@ -715,6 +814,73 @@ function bindModalClose() {
   document.querySelector("[data-close]")?.addEventListener("click", () => document.getElementById("modal-root").innerHTML = "");
   document.getElementById("modal-backdrop")?.addEventListener("click", event => {
     if (event.target.id === "modal-backdrop") event.currentTarget.remove();
+  });
+}
+
+function openProfileModal() {
+  const isCustomer = profile.role !== "Staff";
+  const avatar = profile.photoData
+    ? `<img id="profile-photo-preview" class="profile-photo-preview" src="${escapeHTML(profile.photoData)}" alt="Profile photo">`
+    : `<div id="profile-photo-placeholder" class="profile-photo-placeholder" aria-hidden="true">${escapeHTML(profile.name.charAt(0).toUpperCase())}</div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title"><div class="modal-head"><h2 id="profile-modal-title">Your profile</h2><button class="close-button" data-close aria-label="Close">×</button></div><div class="profile-photo-wrap">${avatar}</div><form id="profile-photo-form"><div class="field"><label for="profile-photo-input">Profile picture</label><input id="profile-photo-input" type="file" accept="image/*" capture="user"><span class="field-help">Take a photo or choose one from your device. It will sync to your account.</span></div><button id="save-profile-photo" class="primary" type="submit" disabled>Save profile photo</button></form><div class="profile-details"><strong>${escapeHTML(profile.name)}</strong><span>${escapeHTML(profile.role)}</span><span>${escapeHTML(profile.email || "")}</span>${isCustomer ? `<span>${profile.role === "Student" ? "Grade" : "Department"}: ${escapeHTML(profile.grade || "")}</span><span>Section: ${escapeHTML(profile.section || "")}</span><span>${profile.role === "Student" ? "LRN" : "Employee ID"}: ${escapeHTML(profile.schoolId || "")}</span>` : ""}</div></section></div>`;
+  bindModalClose();
+  const fileInput = document.getElementById("profile-photo-input");
+  const saveButton = document.getElementById("save-profile-photo");
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    saveButton.disabled = true;
+    try {
+      const imageData = await resizeMenuImage(file);
+      if (fileInput.files?.[0] !== file) return;
+      const preview = document.getElementById("profile-photo-preview");
+      if (preview) {
+        preview.src = imageData;
+      } else {
+        document.getElementById("profile-photo-placeholder")?.replaceWith(
+          Object.assign(document.createElement("img"), {
+            id: "profile-photo-preview",
+            className: "profile-photo-preview",
+            src: imageData,
+            alt: "Selected profile photo preview"
+          })
+        );
+      }
+      saveButton.dataset.imageData = imageData;
+      saveButton.disabled = false;
+    } catch (error) {
+      console.error("Unable to process the selected profile photo.", error);
+      fileInput.value = "";
+      toast(`Could not load that photo: ${error.message}`);
+    }
+  });
+  document.getElementById("profile-photo-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const imageData = saveButton.dataset.imageData;
+    if (!imageData) return;
+    saveButton.disabled = true;
+    try {
+      if (isCustomer && realtimeEnabled) {
+        const updatedProfile = { ...profile, photoData: imageData, updatedAt: Date.now() };
+        await ordersDatabase.ref("customerProfiles").child(profile.id).set(updatedProfile);
+        profile = updatedProfile;
+      } else if (profile.role === "Staff" && realtimeEnabled) {
+        await ordersDatabase.ref("profilePhotos").child(profile.id).set({
+          imageData,
+          updatedAt: Date.now()
+        });
+        profile.photoData = imageData;
+      } else {
+        profile.photoData = imageData;
+      }
+      write(STORAGE.profile, profile);
+      render();
+      toast("Profile photo saved.");
+    } catch (error) {
+      console.error("Unable to save profile photo.", error);
+      saveButton.disabled = false;
+      toast("Profile photo was not saved. Check your account permissions and connection.");
+    }
   });
 }
 
@@ -1068,7 +1234,7 @@ function renderStaff() {
   const dailyOrders = todayOrders();
   const sales = dailyOrders.filter(order => order.status === "Completed").reduce((sum, order) =>
     sum + Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)), 0);
-  document.getElementById("app").innerHTML = `<div class="app-shell">  <header class="topbar"><div class="brand"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em><span style="font:600 11px 'DM Sans';color:#78827b;letter-spacing:0;margin-left:4px">STAFF</span></div><div class="top-actions"><button class="share-button" data-install-app aria-label="Add to Home Screen" type="button">＋ Add to Home Screen</button><button class="share-button" data-share-app type="button">▦ Share app</button><button class="icon-button" id="logout">Sign out</button><div class="user-chip"><span class="avatar">${name.charAt(0)}</span><span class="user-name">${name}</span></div></div></header>
+  document.getElementById("app").innerHTML = `<div class="app-shell">  <header class="topbar"><div class="brand"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em><span class="brand-role-label" style="font:600 11px 'DM Sans';color:#78827b;letter-spacing:0;margin-left:4px">STAFF</span></div><div class="top-actions"><button class="share-button" data-install-app aria-label="Add to Home Screen" type="button">＋ Add to Home Screen</button><button class="share-button" data-share-app type="button">▦ Share app</button><button class="icon-button" id="logout" aria-label="Sign out">Sign out</button><button class="user-chip profile-trigger" type="button" data-open-profile aria-label="Open profile for ${name}"><span class="avatar">${profile.photoData ? `<img src="${escapeHTML(profile.photoData)}" alt="">` : name.charAt(0)}</span><span class="user-name">${name}</span></button></div></header>
     <main class="staff-page"><div class="staff-header"><div><div class="eyebrow">Canteen operations</div><h1>Good day, ${name.split(" ")[0]}</h1><p class="subtle" style="margin:0">Manage today's orders, stock and menu.</p></div><span class="live-pill ${realtimeStatus === "error" ? "sync-error" : ""}">${realtimeEnabled ? `● ${realtimeStatus === "live" ? "LIVE SYNC" : realtimeStatus === "error" ? "SYNC ERROR" : "CONNECTING"}` : "● THIS DEVICE ONLY"}</span></div>
     <div class="stats-grid" style="margin-bottom:20px"><div class="stat-card"><span>Today's orders</span><strong>${dailyOrders.length}</strong></div><div class="stat-card"><span>Today's completed sales</span><strong>${money(sales)}</strong></div><div class="stat-card"><span>Menu items</span><strong>${menu.length}</strong></div><div class="stat-card"><span>Low stock items</span><strong>${menu.filter(item => item.stock <= 5).length}</strong></div></div>
     <nav class="staff-nav">${["Orders", "Stock", "Menu", "Payments"].map(tab => `<button class="nav-tab ${staffTab === tab ? "active" : ""}" data-staff-tab="${tab}">${tab}</button>`).join("")}</nav>
@@ -1076,6 +1242,7 @@ function renderStaff() {
     <p class="footer-note">${realtimeEnabled ? "Live order queue connected to Firebase. Only staff UIDs allowlisted in Realtime Database rules can view or update the shared queue." : "Staff mode is a local demo. Orders and edits are stored in this browser and are not shared across devices."}</p></main>
     <div id="modal-root"></div></div>`;
   document.getElementById("logout").addEventListener("click", logout);
+  document.querySelector("[data-open-profile]")?.addEventListener("click", openProfileModal);
   bindShareApp();
   bindInstallApp();
   document.querySelectorAll("[data-staff-tab]").forEach(button => button.addEventListener("click", () => { staffTab = button.dataset.staffTab; renderStaff(); }));
@@ -1111,9 +1278,13 @@ function renderStaff() {
       toast(`Order ${orderCode(order)} updated.`);
     }
   }));
+  document.querySelectorAll("[data-restore-stock]").forEach(button => button.addEventListener("click", async () => {
+    const order = orders.find(item => item.id === button.dataset.restoreStock);
+    if (order) await restoreCancelledOrderStock(order, button);
+  }));
   document.querySelectorAll("[data-payment-review]").forEach(button => button.addEventListener("click", async () => {
     const order = orders.find(item => item.id === button.dataset.paymentReview);
-    if (!order || order.paymentStatus !== "pending_review") return;
+    if (!order || order.paymentStatus !== "pending_review" || order.status === "Cancelled") return;
     button.disabled = true;
     try {
       const verifiedAt = Date.now();
@@ -1148,7 +1319,7 @@ function renderStaff() {
   }));
   document.querySelectorAll("[data-payment-cancel]").forEach(button => button.addEventListener("click", async () => {
     const order = orders.find(item => item.id === button.dataset.paymentCancel);
-    if (!order || order.paymentStatus !== "pending_review" || order.payment !== "QR") return;
+    if (!order || order.paymentStatus !== "pending_review" || order.payment !== "QR" || order.status === "Cancelled") return;
     if (!window.confirm(`Cancel order ${orderCode(order)} because the GCash payment was not received? This will return the reserved products to stock. It will not issue a GCash refund.`)) return;
     button.disabled = true;
     await cancelUnreceivedQrOrder(order);
@@ -1314,12 +1485,82 @@ async function cancelUnreceivedQrOrder(order) {
   }
 }
 
+async function restoreCancelledOrderStock(order, button) {
+  if (order.status !== "Cancelled" || !["pending_staff", "manual_review"].includes(order.stockRestorationStatus)) return;
+  button.disabled = true;
+  try {
+    if (realtimeEnabled) {
+      const result = await ordersDatabase.ref("orders").child(order.id).transaction(current => {
+        if (!current || current.status !== "Cancelled" || !["pending_staff", "manual_review"].includes(current.stockRestorationStatus)) return;
+        return {
+          ...current,
+          stockRestorationStatus: "in_progress",
+          stockRestoredItemIds: current.stockRestoredItemIds || []
+        };
+      }, undefined, false);
+      if (!result.committed) {
+        toast("Another staff member is restoring this order, or it has already been processed.");
+        renderStaff();
+        return;
+      }
+      Object.assign(order, result.snapshot.val());
+    }
+
+    for (const item of order.items || []) {
+      if ((order.stockRestoredItemIds || []).includes(item.id)) continue;
+      if (realtimeEnabled) {
+        await changeSharedStock(item.id, Number(item.quantity));
+        const menuItem = menu.find(food => food.id === item.id);
+        if (menuItem) menuItem.stock += Number(item.quantity);
+        const restoredIds = [...(order.stockRestoredItemIds || []), item.id];
+        await ordersDatabase.ref("orders").child(order.id).update({ stockRestoredItemIds: restoredIds });
+        order.stockRestoredItemIds = restoredIds;
+      } else {
+        const menuItem = menu.find(food => food.id === item.id);
+        if (!menuItem) throw new Error(`The product ${item.name} is missing from local stock.`);
+        menuItem.stock += Number(item.quantity);
+        order.stockRestoredItemIds = [...(order.stockRestoredItemIds || []), item.id];
+        write(STORAGE.menu, menu);
+        write(STORAGE.orders, orders);
+      }
+    }
+    order.stockRestorationStatus = "complete";
+    if (realtimeEnabled) {
+      await ordersDatabase.ref("orders").child(order.id).update({ stockRestorationStatus: "complete" });
+    } else {
+      write(STORAGE.orders, orders);
+    }
+    toast(`Reserved stock for order ${orderCode(order)} restored.`);
+  } catch (error) {
+    console.error(`Unable to restore stock for cancelled order ${order.id}.`, error);
+    order.stockRestorationStatus = "manual_review";
+    if (realtimeEnabled) {
+      try {
+        await ordersDatabase.ref("orders").child(order.id).update({ stockRestorationStatus: "manual_review" });
+      } catch (statusError) {
+        console.error(`Unable to record stock-restoration failure for order ${order.id}.`, statusError);
+      }
+    } else {
+      write(STORAGE.orders, orders);
+    }
+    toast(`Stock for order ${orderCode(order)} needs review. Correct the product quantities manually if necessary.`);
+  } finally {
+    renderStaff();
+  }
+}
+
 function staffOrdersContent() {
   const sorted = todayOrders().sort((a, b) => b.createdAt - a.createdAt);
+  const pendingStockRestorations = orders.filter(order =>
+    order.status === "Cancelled" && ["pending_staff", "manual_review"].includes(order.stockRestorationStatus)
+  );
+  const restorationQueue = pendingStockRestorations.length
+    ? `<div class="panel stock-restoration-queue"><h2>Cancelled orders needing stock return</h2>${pendingStockRestorations.map(order => `<div class="staff-item"><div><strong>Order ${escapeHTML(orderCode(order))}</strong><div class="subtle">${(order.items || []).map(item => `${Number(item.quantity || 0)}× ${escapeHTML(item.name || "Item")}`).join(", ")}</div></div><button class="secondary" data-restore-stock="${escapeHTML(order.id)}">${order.stockRestorationStatus === "manual_review" ? "Retry stock return" : "Restore stock"}</button></div>`).join("")}</div>`
+    : "";
   const orderContent = sorted.length
     ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Placed</th><th>Status</th></tr></thead><tbody>${sorted.map(order => `<tr><td><strong>${escapeHTML(orderCode(order))}</strong></td><td>${escapeHTML(order.customer)}<div class="subtle" style="font-size:10px">${escapeHTML(order.grade)} · ${escapeHTML(order.section)}</div></td><td>${order.items.map(item => `${item.quantity}× ${escapeHTML(item.name)}`).join(", ")}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}${order.walletDiscount ? `<div class="subtle" style="font-size:10px">after points</div>` : ""}</td><td>${escapeHTML(order.payment)}${order.payment === "QR" ? `<div class="${order.paymentStatus === "paid" ? "payment-confirmed-note" : order.paymentStatus === "not_received" ? "payment-review-note" : "payment-review-note"}">${order.paymentStatus === "paid" ? "Verified" : order.paymentStatus === "not_received" ? "Not received" : "Awaiting verification"}</div>` : ""}</td><td>${new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td><td>${order.status === "Cancelled" ? `<span class="order-status order-cancelled">Cancelled</span>` : order.payment === "QR" && order.paymentStatus !== "paid" ? `<span class="subtle">Verify payment first</span>` : `<select class="status-select" data-status="${escapeHTML(order.id)}" aria-label="Update status for order ${escapeHTML(orderCode(order))}">${statuses.map(status => `<option ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}</select>`}</td></tr>`).join("")}</tbody></table></div>`
     : `<div class="empty-state"><div class="empty-icon">📋</div>No orders today. New customer orders will appear here.</div>`;
-  return `${salesReportContent()}${orderContent}`;
+  return `${salesReportContent()}${restorationQueue}${orderContent}`;
 }
 
 function staffPaymentsContent() {
@@ -1337,7 +1578,7 @@ function staffPaymentsContent() {
       ${gcashQr?.imageData ? `<button id="remove-gcash-qr" class="secondary" type="button" style="margin-top:10px">Remove receiver QR</button>` : ""}
     </div>
     <div class="section-heading"><div><h2>Payments needing review</h2><p class="subtle" style="margin:5px 0 0">Check each transfer in the receiver's GCash account before confirming.</p></div></div>
-    ${pendingPayments.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>GCash reference</th><th>Submitted</th><th>Review</th></tr></thead><tbody>${pendingPayments.map(order => `<tr><td><strong>${escapeHTML(orderCode(order))}</strong></td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "Missing")}</td><td>${new Date(order.createdAt).toLocaleString()}</td><td><div class="payment-review-actions"><button class="primary confirm-payment" type="button" data-payment-review="${escapeHTML(order.id)}">Confirm received</button><button class="secondary cancel-payment" type="button" data-payment-cancel="${escapeHTML(order.id)}">Not received — cancel order</button></div></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>No GCash transfers are waiting for review.</div>`}
+    ${pendingPayments.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>GCash reference</th><th>Submitted</th><th>Review</th></tr></thead><tbody>${pendingPayments.map(order => `<tr><td><strong>${escapeHTML(orderCode(order))}</strong>${order.status === "Cancelled" ? `<div class="order-status order-cancelled">Cancelled</div>` : ""}</td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "Missing")}</td><td>${new Date(order.createdAt).toLocaleString()}</td><td>${order.status === "Cancelled" ? `<span class="payment-review-note">Check GCash directly; handle any refund manually.</span>` : `<div class="payment-review-actions"><button class="primary confirm-payment" type="button" data-payment-review="${escapeHTML(order.id)}">Confirm received</button><button class="secondary cancel-payment" type="button" data-payment-cancel="${escapeHTML(order.id)}">Not received — cancel order</button></div>`}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><div class="empty-icon">🧾</div>No GCash transfers are waiting for review.</div>`}
     <div class="section-heading"><div><h2>Recently confirmed</h2></div></div>
     ${recentConfirmed.length ? `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>Reference</th><th>Confirmed by</th></tr></thead><tbody>${recentConfirmed.map(order => `<tr><td>${escapeHTML(orderCode(order))}</td><td>${escapeHTML(order.customer)}</td><td>${money(Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)))}</td><td>${escapeHTML(order.paymentReference || "")}</td><td>${escapeHTML(order.paymentVerifiedBy || "")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No GCash payments have been confirmed yet.</p>`}
     <p class="payment-review-note">CampuSnack cannot check GCash transactions automatically. Confirm only after the amount and reference are visible in the receiver's GCash transaction history. Never use a customer's screenshot alone as proof of payment.</p>`;
@@ -1437,18 +1678,18 @@ function resizeGcashQr(file) {
 }
 
 function staffStockContent() {
-  return `<div class="section-heading" style="margin-top:0"><div><h2>Stock tracker</h2><p class="subtle" style="margin:5px 0 0">Update quantities as canteen stock changes.</p></div></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name"><span class="small-emoji">${escapeHTML(item.emoji)}</span><div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="${item.stock <= 5 ? "stock-low" : "subtle"}" style="font-size:11px;margin-top:3px">${item.stock <= 5 ? "Low stock · " : ""}${item.stock} available</div></div></div><label style="font-size:11px;color:#79847b">Stock <input data-stock="${escapeHTML(item.id)}" type="number" min="0" value="${item.stock}" style="width:66px;padding:7px;border:1px solid var(--line);border-radius:8px;margin-left:5px"></label></div>`).join("")}`;
+  return `<div class="section-heading" style="margin-top:0"><div><h2>Stock tracker</h2><p class="subtle" style="margin:5px 0 0">Update quantities as canteen stock changes.</p></div></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji" aria-hidden="true">🍽️</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="${item.stock <= 5 ? "stock-low" : "subtle"}" style="font-size:11px;margin-top:3px">${item.stock <= 5 ? "Low stock · " : ""}${item.stock} available</div></div></div><label style="font-size:11px;color:#79847b">Stock <input data-stock="${escapeHTML(item.id)}" type="number" min="0" value="${item.stock}" style="width:66px;padding:7px;border:1px solid var(--line);border-radius:8px;margin-left:5px"></label></div>`).join("")}`;
 }
 
 function staffMenuContent() {
-  return `<div class="section-heading" style="margin-top:0"><div><h2>Live menu editor</h2><p class="subtle" style="margin:5px 0 0">${realtimeEnabled ? "Changes publish to all signed-in devices immediately." : "Changes are saved on this device only."}</p></div><button id="add-menu-item" class="primary" style="width:auto">＋ Add item</button></div>${menu.length ? menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji">${escapeHTML(item.emoji)}</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="subtle" style="font-size:11px;margin-top:3px">${escapeHTML(item.category)} · ${money(item.price)} · ${item.stock} in stock</div></div></div><div class="staff-menu-actions"><button class="secondary" data-edit-menu="${escapeHTML(item.id)}">Edit</button><label class="delete-slider-label" for="delete-menu-${escapeHTML(item.id)}">Slide fully to delete</label><input id="delete-menu-${escapeHTML(item.id)}" class="delete-menu-slider" data-delete-menu="${escapeHTML(item.id)}" type="range" min="0" max="100" value="0" aria-label="Slide fully to delete ${escapeHTML(item.name)}"></div></div>`).join("") : `<div class="empty-state"><div class="empty-icon">🍽️</div>No menu items yet. Add an item to publish it.</div>`}`;
+  return `<div class="section-heading" style="margin-top:0"><div><h2>Live menu editor</h2><p class="subtle" style="margin:5px 0 0">${realtimeEnabled ? "Changes publish to all signed-in devices immediately." : "Changes are saved on this device only."}</p></div><button id="add-menu-item" class="primary" style="width:auto">＋ Add item</button></div>${menu.length ? menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji" aria-hidden="true">🍽️</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="subtle" style="font-size:11px;margin-top:3px">${escapeHTML(item.category)} · ${money(item.price)} · ${item.stock} in stock</div></div></div><div class="staff-menu-actions"><button class="secondary" data-edit-menu="${escapeHTML(item.id)}">Edit</button><label class="delete-slider-label" for="delete-menu-${escapeHTML(item.id)}">Slide fully to delete</label><input id="delete-menu-${escapeHTML(item.id)}" class="delete-menu-slider" data-delete-menu="${escapeHTML(item.id)}" type="range" min="0" max="100" value="0" aria-label="Slide fully to delete ${escapeHTML(item.name)}"></div></div>`).join("") : `<div class="empty-state"><div class="empty-icon">🍽️</div>No menu items yet. Add an item to publish it.</div>`}`;
 }
 
 function openMenuEditor(id = "") {
-  const item = menu.find(food => food.id === id) || { name: "", category: "Meals", description: "", price: "", points: 1, stock: 0, emoji: "🍽️", tag: "", image: "" };
+  const item = menu.find(food => food.id === id) || { name: "", category: "Meals", description: "", price: "", stock: 0, tag: "", image: "" };
   const startingStock = Number(item.stock);
   let image = item.image || "";
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field-grid"><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div><div class="field"><label for="item-emoji">Emoji fallback</label><input id="item-emoji" name="emoji" value="${escapeHTML(item.emoji)}" required></div></div><div class="field"><label for="item-image">Product photo</label><input id="item-image" name="image" type="file" accept="image/*"><img id="item-image-preview" class="menu-image-preview" src="${escapeHTML(image)}" alt="Product photo preview" ${image ? "" : "hidden"}><button class="secondary" id="remove-item-image" type="button" ${image ? "" : "hidden"}>Remove photo</button><span class="field-help">Choose a product photo. Images are resized to fit this device's local storage.</span></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" value="${item.stock}" required></div></div><div class="field"><label for="item-points">Points per item</label><input id="item-points" name="points" type="number" min="0" value="${item.points}" required></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div><div class="field"><label for="item-image">Product photo</label><input id="item-image" name="image" type="file" accept="image/*" capture="environment"><img id="item-image-preview" class="menu-image-preview" src="${escapeHTML(image)}" alt="Product photo preview" ${image ? "" : "hidden"}><button class="secondary" id="remove-item-image" type="button" ${image ? "" : "hidden"}>Remove photo</button><span class="field-help">Take a photo or choose one from your device. The image is resized before it is saved.</span></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" value="${item.stock}" required></div></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
   bindModalClose();
   const imageInput = document.getElementById("item-image");
   const imagePreview = document.getElementById("item-image-preview");
@@ -1482,10 +1723,8 @@ function openMenuEditor(id = "") {
       name: String(data.get("name")).trim(),
       description: String(data.get("description")).trim(),
       category: data.get("category"),
-      emoji: String(data.get("emoji")).trim(),
       price: Number(data.get("price")),
       stock: Math.max(0, Number(data.get("stock"))),
-      points: Math.max(0, Number(data.get("points"))),
       tag: item.tag || "",
       image,
       sortOrder: Number(item.sortOrder ?? (id ? menu.findIndex(food => food.id === id) : menu.length))
@@ -1494,11 +1733,16 @@ function openMenuEditor(id = "") {
     if (submitButton) submitButton.disabled = true;
     try {
       if (realtimeEnabled && id) {
-        const result = await ordersDatabase.ref("menu").child(updated.id).transaction(current => ({
-          ...(current || {}),
-          ...updated,
-          stock: updated.stock === startingStock ? current?.stock ?? updated.stock : updated.stock
-        }), undefined, false);
+        const result = await ordersDatabase.ref("menu").child(updated.id).transaction(current => {
+          const next = {
+            ...(current || {}),
+            ...updated,
+            stock: updated.stock === startingStock ? current?.stock ?? updated.stock : updated.stock
+          };
+          delete next.points;
+          delete next.emoji;
+          return next;
+        }, undefined, false);
         if (!result.committed) throw new Error("The shared menu item could not be updated.");
         Object.assign(updated, result.snapshot.val());
       } else if (realtimeEnabled) {
@@ -1526,17 +1770,26 @@ function resizeMenuImage(file) {
       const source = new Image();
       source.onerror = () => reject(new Error("Unable to decode image file."));
       source.onload = () => {
-        const scale = Math.min(1, 900 / Math.max(source.naturalWidth, source.naturalHeight));
         const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(source.naturalHeight * scale));
         const context = canvas.getContext("2d");
         if (!context) {
           reject(new Error("Canvas is unavailable."));
           return;
         }
-        context.drawImage(source, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.78));
+        for (const maxDimension of [900, 720, 560, 420]) {
+          const scale = Math.min(1, maxDimension / Math.max(source.naturalWidth, source.naturalHeight));
+          canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(source.naturalHeight * scale));
+          context.drawImage(source, 0, 0, canvas.width, canvas.height);
+          for (const quality of [0.82, 0.74, 0.66]) {
+            const imageData = canvas.toDataURL("image/jpeg", quality);
+            if (imageData.length <= 280_000) {
+              resolve(imageData);
+              return;
+            }
+          }
+        }
+        reject(new Error("The photo is too large after resizing. Choose a smaller or lower-resolution image."));
       };
       source.src = String(reader.result);
     };
@@ -1574,17 +1827,17 @@ function logout() {
 
 window.addEventListener("storage", event => {
   if (event.key === STORAGE.orders && !realtimeEnabled) orders = read(STORAGE.orders, []);
-  if (event.key === STORAGE.menu && !realtimeEnabled) menu = read(STORAGE.menu, initialMenu);
+  if (event.key === STORAGE.menu && !realtimeEnabled) menu = read(STORAGE.menu, initialMenu).filter(Boolean).map(cleanMenuItem);
   if (event.key === STORAGE.gcashQr && !realtimeEnabled) gcashQr = read(STORAGE.gcashQr, null);
-  if (profile) render();
+  if (profile && !document.querySelector(".modal-backdrop")) render();
 });
 window.addEventListener("focus", () => {
   if (!realtimeEnabled) {
     orders = read(STORAGE.orders, []);
-    menu = read(STORAGE.menu, initialMenu);
+    menu = read(STORAGE.menu, initialMenu).filter(Boolean).map(cleanMenuItem);
     gcashQr = read(STORAGE.gcashQr, null);
   }
-  if (profile) render();
+  if (profile && !document.querySelector(".modal-backdrop")) render();
 });
 let displayedDay = dateKey(Date.now());
 setInterval(() => {
