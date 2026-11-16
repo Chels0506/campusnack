@@ -1827,12 +1827,19 @@ async function confirmStockSession(button) {
   }
 }
 
+function isLegacyStockLabelCode(code) {
+  return /^CS[A-Z0-9]{10,12}$/.test(String(code || ""));
+}
+
 async function createStockLabel(itemId) {
   const item = menu.find(food => food.id === itemId);
   if (!item) return;
-  let barcode = item.barcode;
+  let barcode = isLegacyStockLabelCode(item.barcode) ? "" : item.barcode;
   if (!barcode) {
-    barcode = `CS${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+    do {
+      barcode = `C${Array.from({ length: 5 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("")}`;
+    } while (menu.some(food => food.barcode === barcode));
     try {
       await saveLinkedBarcode(item.id, barcode);
     } catch (error) {
@@ -2387,7 +2394,7 @@ function staffStockContent() {
   const alert = lowStockItems.length
     ? `<div class="stock-low-alert" role="status"><strong>Low-stock alert</strong><span>${lowStockItems.map(item => `${escapeHTML(item.name)} (${Number(item.stock)})`).join(" · ")}</span></div>`
     : "";
-  return `${alert}<div class="section-heading" style="margin-top:0"><div><h2>Stock tracker</h2><p class="subtle" style="margin:5px 0 0">Update quantities, review low stock, and print item labels.</p></div></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji" aria-hidden="true">🍽️</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="${item.stock <= lowStockThreshold ? "stock-low" : "subtle"}" style="font-size:11px;margin-top:3px">${item.stock === 0 ? "Sold out · " : item.stock <= lowStockThreshold ? "Low stock · " : ""}${item.stock} available${item.barcode ? ` · ${escapeHTML(item.barcode)}` : ""}</div></div></div><div class="stock-row-actions"><label style="font-size:11px;color:#79847b">Stock <input data-stock="${escapeHTML(item.id)}" type="number" min="0" step="1" value="${item.stock}" aria-label="Set stock for ${escapeHTML(item.name)}"></label><button class="secondary" type="button" data-stock-label="${escapeHTML(item.id)}">${item.barcode ? "Print label" : "Generate label"}</button></div></div>`).join("")}`;
+  return `${alert}<div class="section-heading" style="margin-top:0"><div><h2>Stock tracker</h2><p class="subtle" style="margin:5px 0 0">Update quantities, review low stock, and print item labels.</p></div></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji" aria-hidden="true">🍽️</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="${item.stock <= lowStockThreshold ? "stock-low" : "subtle"}" style="font-size:11px;margin-top:3px">${item.stock === 0 ? "Sold out · " : item.stock <= lowStockThreshold ? "Low stock · " : ""}${item.stock} available${item.barcode ? ` · ${escapeHTML(item.barcode)}` : ""}</div></div></div><div class="stock-row-actions"><label style="font-size:11px;color:#79847b">Stock <input data-stock="${escapeHTML(item.id)}" type="number" min="0" step="1" value="${item.stock}" aria-label="Set stock for ${escapeHTML(item.name)}"></label><button class="secondary" type="button" data-stock-label="${escapeHTML(item.id)}">${item.barcode ? isLegacyStockLabelCode(item.barcode) ? "Shorten & print" : "Print label" : "Generate label"}</button></div></div>`).join("")}`;
 }
 
 function staffMenuContent() {
