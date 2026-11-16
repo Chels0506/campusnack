@@ -71,6 +71,16 @@ The functions notify only allowlisted staff at `/staffUids` and the customer who
 - Points are awarded when an order is completed: 1 point for each ₱10 of the order total. Wallet redemption converts 25 points to ₱1, applies available points as a partial discount up to the order total, and records the points used. Points are calculated for the order, not individual menu products.
 - This wallet is a points discount demo only. It does not collect or transfer actual money.
 
+## Scan Stock
+
+Staff can use **Scan Stock** to receive products, count/audit quantities, or record waste. The camera scanner prefers `BarcodeDetector` and falls back to `html5-qrcode`; it requests the rear camera where available and supports EAN-13, UPC-A, Code 128, and QR codes. Each accepted scan adds one unit, plays a short beep and vibrates when supported, and repeated reads of the same code within one second are ignored. Manual entry and keyboard-wedge USB/Bluetooth scanners are also supported.
+
+Scans remain in an editable session until **Confirm stock changes**. Count mode sets the final quantity and shows the difference; waste mode requires a reason. Unlinked codes can be linked to menu items in the session and are saved when the session is confirmed. Staff can generate and print QR labels for products without manufacturer codes. A configurable low-stock threshold highlights items; zero stock is already shown to customers as **Sold out**.
+
+Confirmed quantities use Realtime Database transactions to handle concurrent staff changes. The database rules allow only allowlisted staff to change staff stock settings and append immutable stock audit entries; authenticated customers may still decrement stock to reserve an order. Stock audit entries record the staff UID, product, mode, delta, reason, before/after quantity, barcode, and time. Local demo changes and their audit records remain in this browser only.
+
+To test without a camera, sign in as staff, open **Scan Stock**, type a linked barcode into **Barcode or QR value**, and press **Add scan** (or scan with a USB/Bluetooth device that types into the field and presses Enter). For a new code, choose a product in the link prompt, then confirm. Test receive, count, and waste modes, including a waste amount greater than available stock, which must be rejected.
+
 The included rules are a starting point for this demo. The app does not validate item prices, inventory, or payments on a trusted server, and the Firebase client config is not an authorization mechanism. Do not use this setup to process real payments or treat client-submitted order totals as trusted; production use should validate orders and inventory server-side.
 
 ## Features
@@ -82,6 +92,7 @@ The included rules are a starting point for this demo. The app does not validate
 - Earn campus points, redeem points as a wallet discount, view rewards, and cancel eligible orders from order history.
 - Open the profile from the top-right account control to view personal details and upload a profile photo. Photos sync with Firebase for signed-in accounts.
 - Switch to Staff view to see weekly/monthly sales and top product demand, manage shared stock and menu items, and advance orders through received, preparing, ready, and completed.
+- Scan EAN-13, UPC-A, Code 128, or QR item codes in staff **Scan Stock** to receive, count, or record waste with a reviewable session and append-only stock audit log.
 - Keep menu edits and stock levels synchronized across signed-in devices through Firebase Realtime Database.
 - In the staff **Menu** tab, choose or take menu photos through the phone's standard photo picker, or slide an item's delete control fully and confirm to remove it from the shared menu and stock tracker. Existing orders remain unchanged.
 - Profile picture and product photo forms each use one photo picker, avoiding duplicate camera controls on mobile.

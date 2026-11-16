@@ -34,6 +34,20 @@
         }
       }
     },
+    "stockSettings": {
+      ".read": "auth != null && root.child('staffUids').child(auth.uid).val() === true",
+      "lowStockThreshold": {
+        ".write": "auth != null && root.child('staffUids').child(auth.uid).val() === true",
+        ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10000"
+      }
+    },
+    "stockAudit": {
+      ".read": "auth != null && root.child('staffUids').child(auth.uid).val() === true",
+      "$entryId": {
+        ".write": "auth != null && root.child('staffUids').child(auth.uid).val() === true && !data.exists() && newData.exists()",
+        ".validate": "newData.hasChildren(['staffUid', 'itemId', 'itemName', 'mode', 'changeAmount', 'reason', 'timestamp', 'beforeStock', 'afterStock', 'barcode']) && newData.child('staffUid').val() === auth.uid && newData.child('itemId').isString() && newData.child('itemName').isString() && (newData.child('mode').val() === 'receive' || newData.child('mode').val() === 'count' || newData.child('mode').val() === 'waste' || newData.child('mode').val() === 'manual') && newData.child('changeAmount').isNumber() && newData.child('changeAmount').val() === newData.child('afterStock').val() - newData.child('beforeStock').val() && newData.child('reason').isString() && newData.child('reason').val().length <= 160 && (newData.child('mode').val() !== 'waste' || newData.child('reason').val().length > 0) && newData.child('timestamp').isNumber() && newData.child('beforeStock').isNumber() && newData.child('beforeStock').val() >= 0 && newData.child('afterStock').isNumber() && newData.child('afterStock').val() >= 0 && newData.child('barcode').isString() && newData.child('barcode').val().length <= 120"
+      }
+    },
     "studentLrnClaims": {
       "$lrn": {
         ".read": "auth != null && auth.token.firebase.sign_in_provider === 'password' && (!data.exists() || data.val() === auth.uid)",
@@ -56,8 +70,12 @@
     "menu": {
       ".read": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || auth.token.firebase.sign_in_provider === 'password')",
       "$itemId": {
-        ".write": "auth != null && (root.child('staffUids').child(auth.uid).val() === true || (auth.token.firebase.sign_in_provider === 'password' && data.exists() && newData.exists() && data.child('stock').isNumber() && newData.child('stock').isNumber() && newData.child('stock').val() >= 0 && newData.child('stock').val() < data.child('stock').val() && newData.child('id').val() === data.child('id').val() && newData.child('name').val() === data.child('name').val() && newData.child('category').val() === data.child('category').val() && newData.child('description').val() === data.child('description').val() && newData.child('price').val() === data.child('price').val() && newData.child('tag').val() === data.child('tag').val() && newData.child('image').val() === data.child('image').val() && newData.child('sortOrder').val() === data.child('sortOrder').val()))",
-        ".validate": "newData.hasChildren(['id', 'name', 'category', 'description', 'price', 'stock', 'tag', 'sortOrder']) && newData.child('id').val() === $itemId && newData.child('price').isNumber() && newData.child('stock').isNumber() && newData.child('stock').val() >= 0 && (!newData.child('image').exists() || (newData.child('image').isString() && newData.child('image').val().length <= 300000))"
+        ".write": "auth != null && root.child('staffUids').child(auth.uid).val() === true && (!data.exists() || !newData.exists() || newData.child('stock').val() === data.child('stock').val())",
+        ".validate": "newData.hasChildren(['id', 'name', 'category', 'description', 'price', 'stock', 'tag', 'sortOrder']) && newData.child('id').val() === $itemId && newData.child('price').isNumber() && newData.child('stock').isNumber() && newData.child('stock').val() >= 0 && (!newData.child('barcode').exists() || (newData.child('barcode').isString() && newData.child('barcode').val().length <= 120)) && (!newData.child('image').exists() || (newData.child('image').isString() && newData.child('image').val().length <= 300000))",
+        "stock": {
+          ".write": "auth != null && ((root.child('staffUids').child(auth.uid).val() === true) || (auth.token.firebase.sign_in_provider === 'password' && data.isNumber() && newData.isNumber() && newData.val() >= 0 && newData.val() < data.val()))",
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        }
       }
     },
     "orders": {

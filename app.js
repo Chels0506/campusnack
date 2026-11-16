@@ -5,7 +5,9 @@ const STORAGE = {
   likes: "campusnack.likes",
   gcashQr: "campusnack.gcashQr",
   orderCounter: "campusnack.orderCounter",
-  notificationDeviceId: "campusnack.notificationDeviceId"
+  notificationDeviceId: "campusnack.notificationDeviceId",
+  stockAudit: "campusnack.stockAudit",
+  lowStockThreshold: "campusnack.lowStockThreshold"
 };
 const STAFF_CODE = "EAPIHS2009";
 const APP_PUBLIC_URL = "https://chels0506.github.io/campusnack/";
@@ -74,6 +76,18 @@ let selectedSalesBucket = null;
 let customerAuthMode = "signin";
 let pendingCustomerUser = null;
 let pendingCustomerRole = "Student";
+let stockMode = "receive";
+let stockSession = [];
+let stockUndoStack = [];
+let stockScanCodeMap = new Map();
+let lastStockScanAt = new Map();
+let pendingStockCodes = new Set();
+let stockCameraStream = null;
+let stockHtml5Scanner = null;
+let stockScanTimer = null;
+let stockCameraActive = false;
+let lowStockThreshold = Math.max(0, Number(read(STORAGE.lowStockThreshold, 5)) || 0);
+let stockSettingsSubscription = null;
 
 function setupRealtime() {
   const configValues = ["apiKey", "authDomain", "databaseURL", "projectId", "messagingSenderId", "appId"];
@@ -531,6 +545,7 @@ function connectOrderSync() {
   if (orderSubscription) orderSubscription.off("value");
   if (menuSubscription) menuSubscription.off("value");
   if (paymentSettingsSubscription) paymentSettingsSubscription.off("value");
+  if (stockSettingsSubscription) stockSettingsSubscription.off("value");
   const user = firebaseAuth.currentUser;
   const reference = ordersDatabase.ref("orders");
   const query = profile.role === "Staff" ? reference : reference.orderByChild("owner").equalTo(user.uid);
@@ -590,6 +605,18 @@ function connectOrderSync() {
     console.error("Live GCash QR synchronization failed.", error);
     toast("The GCash payment QR could not be loaded. Check Firebase rules and your connection.");
   });
+  if (profile.role === "Staff") {
+    stockSettingsSubscription = ordersDatabase.ref("stockSettings/lowStockThreshold");
+    stockSettingsSubscription.on("value", snapshot => {
+      if (snapshot.exists() && Number.isInteger(snapshot.val()) && snapshot.val() >= 0) {
+        lowStockThreshold = snapshot.val();
+        write(STORAGE.lowStockThreshold, lowStockThreshold);
+        if (profile?.role === "Staff") renderStaff();
+      }
+    }, error => {
+      console.error("Unable to load the shared low-stock threshold.", error);
+    });
+  }
 }
 
 function renderCustomer() {
@@ -1371,16 +1398,471 @@ function salesReportContent() {
   </div>`;
 }
 
+function stockSessionMarkup() {
+  if (!stockSession.length) return `<div class="empty-state"><div class="empty-icon">📦</div>Scan a product barcode, enter it manually, or use a keyboard scanner.</div>`;
+  return `<div class="stock-session-lines">${stockSession.map(line => {
+    const item = menu.find(food => food.id === line.itemId);
+    const currentStock = Number(item?.stock || 0);
+    const quantity = stockMode === "count" ? line.countedQuantity : line.scannedQuantity;
+    const difference = stockMode === "count" ? line.countedQuantity - currentStock : stockMode === "waste" ? -line.scannedQuantity : line.scannedQuantity;
+    return `<article class="stock-session-line ${line.confirmed ? "stock-session-confirmed" : ""}">
+      <div class="stock-session-item"><strong>${escapeHTML(item?.name || line.itemName)}</strong><span>${stockMode === "count" ? `System: ${currentStock} · Difference: ${difference > 0 ? "+" : ""}${difference}` : `${currentStock} currently in stock`}</span>${line.pendingBarcode ? `<small>Will link code ${escapeHTML(line.pendingBarcode)} on confirm</small>` : ""}${line.confirmed ? `<small>${line.auditPending ? "Stock applied; audit write pending retry." : "Confirmed"}</small>` : ""}</div>
+      <div class="stock-session-controls"><button type="button" class="stock-step" data-stock-step="-1" data-stock-item="${escapeHTML(line.itemId)}" aria-label="Decrease quantity" ${line.confirmed ? "disabled" : ""}>−</button><output>${quantity}</output><button type="button" class="stock-step" data-stock-step="1" data-stock-item="${escapeHTML(line.itemId)}" aria-label="Increase quantity" ${line.confirmed ? "disabled" : ""}>+</button><button type="button" class="secondary stock-remove" data-stock-remove="${escapeHTML(line.itemId)}" ${line.confirmed ? "disabled" : ""}>Remove</button></div>
+    </article>`;
+  }).join("")}</div>`;
+}
+
+function scanStockContent() {
+  const reasonRequired = stockMode === "waste";
+  return `<div class="section-heading scan-stock-heading"><div><h2>Scan stock</h2><p class="subtle">Scan or type item codes to build a session. Stock is not saved until you confirm.</p></div></div>
+    <div class="scan-stock-settings">
+      <label class="field"><span>Mode</span><select id="stock-mode"><option value="receive" ${stockMode === "receive" ? "selected" : ""}>Receive stock (+)</option><option value="count" ${stockMode === "count" ? "selected" : ""}>Count / audit</option><option value="waste" ${stockMode === "waste" ? "selected" : ""}>Adjust / waste (−)</option></select></label>
+      <label class="field"><span>Low-stock alert at</span><input id="low-stock-threshold" type="number" min="0" step="1" value="${lowStockThreshold}"></label>
+    </div>
+    <p class="field-help">Items at or below the threshold are flagged. Zero stock is automatically shown as Sold out to customers.</p>
+    <div id="stock-reason-wrap" class="field" ${reasonRequired ? "" : "hidden"}><label for="stock-reason">Reason for adjustment / waste (required)</label><input id="stock-reason" maxlength="160" placeholder="e.g. expired, damaged, correction" ${reasonRequired ? "required" : ""}></div>
+    <div class="scan-stock-camera panel"><div class="scan-stock-camera-actions"><button id="start-stock-camera" class="primary scan-stock-action" type="button">Start camera scanner</button><button id="stop-stock-camera" class="secondary scan-stock-action" type="button" disabled>Stop camera</button></div><div id="stock-camera-view" class="stock-camera-view" hidden><video id="stock-camera-video" playsinline muted></video><div id="html5-qrcode-view"></div></div><p id="stock-scan-status" class="field-help" role="status">Use the camera or enter a barcode below. The rear camera is preferred.</p></div>
+    <form id="stock-manual-form" class="stock-manual-form"><label for="stock-manual-code">Barcode or QR value</label><div><input id="stock-manual-code" type="text" inputmode="text" autocomplete="off" placeholder="Type a code or scan with a USB/Bluetooth scanner" maxlength="120"><button class="primary" type="submit">Add scan</button></div><span class="field-help">Keyboard scanners usually type the code and press Enter.</span></form>
+    <div id="stock-link-panel" class="stock-link-panel" hidden></div>
+    <section class="stock-session panel"><div class="stock-session-heading"><div><h3>Current session</h3><span id="stock-session-summary" class="field-help">${stockSession.length} product${stockSession.length === 1 ? "" : "s"} · ${stockSession.reduce((sum, line) => sum + (stockMode === "count" ? Number(line.countedQuantity || 0) : Number(line.scannedQuantity || 0)), 0)} ${stockMode === "count" ? "counted units" : "scanned units"}</span></div><button id="undo-stock-scan" class="secondary" type="button" ${stockUndoStack.length ? "" : "disabled"}>Undo last scan</button></div><div id="stock-session-list">${stockSessionMarkup()}</div><div class="stock-session-footer"><button id="clear-stock-session" class="secondary" type="button" ${stockSession.length && !stockSession.some(line => line.confirmed) ? "" : "disabled"}>Clear session</button><button id="confirm-stock-session" class="primary" type="button" ${stockSession.length ? "" : "disabled"}>Confirm stock changes</button></div></section>`;
+}
+
+function renderStockSession() {
+  const list = document.getElementById("stock-session-list");
+  if (!list) return;
+  list.innerHTML = stockSessionMarkup();
+  const summary = document.getElementById("stock-session-summary");
+  if (summary) {
+    const quantity = stockSession.reduce((sum, line) =>
+      sum + (stockMode === "count" ? Number(line.countedQuantity || 0) : Number(line.scannedQuantity || 0)), 0);
+    summary.textContent = `${stockSession.length} product${stockSession.length === 1 ? "" : "s"} · ${quantity} ${stockMode === "count" ? "counted units" : "scanned units"}`;
+  }
+  document.querySelectorAll("[data-stock-step]").forEach(button => button.addEventListener("click", () => {
+    const line = stockSession.find(entry => entry.itemId === button.dataset.stockItem);
+    if (!line || line.confirmed) return;
+    const property = stockMode === "count" ? "countedQuantity" : "scannedQuantity";
+    line[property] = Math.max(0, Number(line[property] || 0) + Number(button.dataset.stockStep));
+    if (line[property] === 0 && stockMode !== "count") stockSession = stockSession.filter(entry => entry !== line);
+    renderStockSession();
+  }));
+  document.querySelectorAll("[data-stock-remove]").forEach(button => button.addEventListener("click", () => {
+    stockSession = stockSession.filter(entry => entry.itemId !== button.dataset.stockRemove);
+    stockUndoStack = stockUndoStack.filter(entry => entry.itemId !== button.dataset.stockRemove);
+    renderStockSession();
+  }));
+  const confirmButton = document.getElementById("confirm-stock-session");
+  const clearButton = document.getElementById("clear-stock-session");
+  const undoButton = document.getElementById("undo-stock-scan");
+  if (confirmButton) confirmButton.disabled = !stockSession.length;
+  if (clearButton) clearButton.disabled = !stockSession.length || stockSession.some(line => line.confirmed);
+  if (undoButton) undoButton.disabled = !stockUndoStack.length;
+}
+
+function playStockScanFeedback() {
+  try {
+    const AudioContextType = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextType) {
+      const context = new AudioContextType();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.value = 880;
+      gain.gain.setValueAtTime(0.08, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.12);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.12);
+      oscillator.onended = () => context.close();
+    }
+  } catch (error) {
+    console.error("Unable to play the stock scan sound.", error);
+  }
+  if (navigator.vibrate) navigator.vibrate(70);
+}
+
+function showStockScanStatus(message, isError = false) {
+  const status = document.getElementById("stock-scan-status");
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle("scan-stock-error", isError);
+}
+
+function renderUnknownStockCode(code) {
+  const panel = document.getElementById("stock-link-panel");
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = `<strong>Unlinked code: ${escapeHTML(code)}</strong><label for="stock-link-item">Link this code to a menu item</label><select id="stock-link-item">${menu.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)}${item.barcode ? " (already linked)" : ""}</option>`).join("")}</select><button id="link-stock-code" class="primary" type="button" ${menu.length ? "" : "disabled"}>Link and add scan</button><button id="dismiss-stock-link" class="secondary" type="button">Dismiss</button>`;
+  document.getElementById("link-stock-code")?.addEventListener("click", () => {
+    const item = menu.find(food => food.id === document.getElementById("stock-link-item")?.value);
+    if (!item) {
+      showStockScanStatus("Add a menu item before linking this code.", true);
+      return;
+    }
+    if (item.barcode && item.barcode !== code) {
+      showStockScanStatus("That product already has a different barcode. Clear or change its barcode in Edit menu item first.", true);
+      return;
+    }
+    stockScanCodeMap.set(code, item.id);
+    pendingStockCodes.delete(code);
+    addStockScan(code, item, true, true);
+    panel.hidden = true;
+  });
+  document.getElementById("dismiss-stock-link")?.addEventListener("click", () => {
+    pendingStockCodes.delete(code);
+    panel.hidden = true;
+  });
+}
+
+function addStockScan(rawCode, selectedItem = null, isPendingLink = false, bypassDebounce = false) {
+  const code = String(rawCode || "").trim();
+  if (!code) {
+    showStockScanStatus("Enter or scan a non-empty code.", true);
+    return;
+  }
+  const now = Date.now();
+  if (!bypassDebounce && (pendingStockCodes.has(code) || now - Number(lastStockScanAt.get(code) || 0) < 1000)) {
+    showStockScanStatus(`Repeated scan ignored: ${code}`);
+    return;
+  }
+  const itemId = selectedItem?.id || stockScanCodeMap.get(code) || menu.find(food => food.barcode === code)?.id;
+  const item = selectedItem || menu.find(food => food.id === itemId);
+  if (!item) {
+    lastStockScanAt.set(code, now);
+    pendingStockCodes.add(code);
+    renderUnknownStockCode(code);
+    showStockScanStatus(`Code ${code} is not linked to a menu item. Choose an item to continue.`, true);
+    return;
+  }
+  lastStockScanAt.set(code, now);
+  stockScanCodeMap.set(code, item.id);
+  let line = stockSession.find(entry => entry.itemId === item.id);
+  if (!line) {
+    line = { itemId: item.id, itemName: item.name, scannedQuantity: 0, countedQuantity: 0, confirmed: false, pendingBarcode: isPendingLink ? code : "" };
+    stockSession.push(line);
+  } else if (isPendingLink && !line.pendingBarcode && !item.barcode) {
+    line.pendingBarcode = code;
+  }
+  line.confirmed = false;
+  line.auditPending = null;
+  if (stockMode === "count") line.countedQuantity += 1;
+  else line.scannedQuantity += 1;
+  stockUndoStack.push({ itemId: item.id, mode: stockMode });
+  playStockScanFeedback();
+  showStockScanStatus(`Added ${item.name} · ${stockMode === "count" ? line.countedQuantity : line.scannedQuantity} in this session.`);
+  renderStockSession();
+}
+
+async function loadHtml5Scanner() {
+  if (window.Html5Qrcode) return;
+  await new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js";
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("Could not load the scanner fallback library. Check your connection."));
+    document.head.append(script);
+  });
+}
+
+async function startStockCamera() {
+  const startButton = document.getElementById("start-stock-camera");
+  const stopButton = document.getElementById("stop-stock-camera");
+  const cameraView = document.getElementById("stock-camera-view");
+  if (!startButton || !cameraView) return;
+  startButton.disabled = true;
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera access is unsupported here. Use HTTPS on a supported browser, or enter/scan a code below.");
+    cameraView.hidden = false;
+    const nativeSupported = "BarcodeDetector" in window
+      ? await BarcodeDetector.getSupportedFormats().catch(() => [])
+      : [];
+    const requiredFormats = ["ean_13", "upc_a", "upc_e", "code_128", "qr_code"];
+    if (requiredFormats.every(format => nativeSupported.includes(format))) {
+      const detector = new BarcodeDetector({ formats: requiredFormats });
+      stockCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+      const video = document.getElementById("stock-camera-video");
+      video.srcObject = stockCameraStream;
+      await video.play();
+      stockCameraActive = true;
+      stopButton.disabled = false;
+      showStockScanStatus("Camera ready. Point at an EAN-13, UPC, Code 128, or QR code.");
+      const scanFrame = async () => {
+        if (!stockCameraActive || !video?.isConnected) return;
+        try {
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+            const detected = await detector.detect(video);
+            detected.forEach(barcode => addStockScan(barcode.rawValue));
+          }
+        } catch (error) {
+          console.error("BarcodeDetector failed while scanning.", error);
+        }
+        if (stockCameraActive) stockScanTimer = setTimeout(scanFrame, 140);
+      };
+      scanFrame();
+      return;
+    }
+    await loadHtml5Scanner();
+    stockHtml5Scanner = new Html5Qrcode("html5-qrcode-view", { formatsToSupport: [
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.UPC_E,
+      Html5QrcodeSupportedFormats.CODE_128,
+      Html5QrcodeSupportedFormats.QR_CODE
+    ] });
+    await stockHtml5Scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 240, height: 180 }, aspectRatio: 1.333 },
+      decodedText => addStockScan(decodedText),
+      () => {}
+    );
+    stockCameraActive = true;
+    stopButton.disabled = false;
+    showStockScanStatus("Camera ready. Point at an EAN-13, UPC, Code 128, or QR code.");
+  } catch (error) {
+    console.error("Unable to start the stock camera scanner.", error);
+    await stopStockCamera();
+    cameraView.hidden = true;
+    showStockScanStatus(error.name === "NotAllowedError" || error.name === "PermissionDeniedError" || /permission|denied/i.test(error.message || "")
+      ? "Camera permission was denied. Allow camera access in browser settings, or use manual entry / a keyboard scanner."
+      : error.message || "Could not start the camera scanner. Use manual entry or a keyboard scanner.", true);
+  } finally {
+    if (startButton.isConnected) startButton.disabled = false;
+  }
+}
+
+async function stopStockCamera() {
+  stockCameraActive = false;
+  clearTimeout(stockScanTimer);
+  stockScanTimer = null;
+  if (stockCameraStream) {
+    stockCameraStream.getTracks().forEach(track => track.stop());
+    stockCameraStream = null;
+  }
+  if (stockHtml5Scanner) {
+    const scanner = stockHtml5Scanner;
+    stockHtml5Scanner = null;
+    try {
+      if (scanner.isScanning) await scanner.stop();
+      scanner.clear();
+    } catch (error) {
+      console.error("Unable to stop the fallback barcode scanner cleanly.", error);
+    }
+  }
+  const startButton = document.getElementById("start-stock-camera");
+  const stopButton = document.getElementById("stop-stock-camera");
+  const cameraView = document.getElementById("stock-camera-view");
+  if (startButton) startButton.disabled = false;
+  if (stopButton) stopButton.disabled = true;
+  if (cameraView) cameraView.hidden = true;
+}
+
+async function saveLinkedBarcode(itemId, barcode) {
+  const item = menu.find(food => food.id === itemId);
+  if (!item) throw new Error("That menu item is no longer available.");
+  const duplicate = menu.find(food => food.id !== itemId && food.barcode === barcode);
+  if (duplicate) throw new Error(`This code is already linked to ${duplicate.name}.`);
+  if (realtimeEnabled) {
+    const result = await ordersDatabase.ref("menu").child(itemId).transaction(current => {
+      if (!current || (current.barcode && current.barcode !== barcode)) return;
+      return { ...current, barcode };
+    }, undefined, false);
+    if (!result.committed) throw new Error("This menu item changed on another device. Refresh and retry the barcode link.");
+    Object.assign(item, result.snapshot.val());
+  } else {
+    item.barcode = barcode;
+    write(STORAGE.menu, menu);
+  }
+}
+
+async function appendStockAudit(entry) {
+  if (realtimeEnabled) {
+    const auditReference = ordersDatabase.ref("stockAudit").push();
+    await auditReference.set(entry);
+  } else {
+    try {
+      const audit = read(STORAGE.stockAudit, []);
+      audit.push({ ...entry, id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+      localStorage.setItem(STORAGE.stockAudit, JSON.stringify(audit));
+    } catch (error) {
+      throw new Error(`Stock changed, but the local audit log could not be saved: ${error.message}`);
+    }
+  }
+}
+
+async function applyManualStockValue(item, updatedStock, reason) {
+  if (!Number.isInteger(updatedStock) || updatedStock < 0) throw new Error("Stock must be a non-negative whole number.");
+  let beforeStock = Number(item.stock);
+  if (realtimeEnabled) {
+    const result = await ordersDatabase.ref("menu").child(item.id).child("stock").transaction(current => {
+      if (typeof current !== "number" || current < 0) return;
+      beforeStock = current;
+      return updatedStock;
+    }, undefined, false);
+    if (!result.committed) throw new Error("Stock changed on another device. Refresh and retry.");
+    item.stock = Number(result.snapshot.val());
+  } else {
+    item.stock = updatedStock;
+    write(STORAGE.menu, menu);
+  }
+  try {
+    await appendStockAudit({
+      staffUid: profile.id,
+      itemId: item.id,
+      itemName: item.name,
+      mode: "manual",
+      changeAmount: item.stock - beforeStock,
+      reason,
+      timestamp: Date.now(),
+      beforeStock,
+      afterStock: item.stock,
+      barcode: item.barcode || ""
+    });
+  } catch (error) {
+    error.stockApplied = true;
+    throw error;
+  }
+}
+
+async function applyStockSessionLine(line, reason) {
+  const item = menu.find(food => food.id === line.itemId);
+  if (!item) throw new Error(`Menu item "${line.itemName}" was removed. Remove it from this session before confirming.`);
+  if (line.pendingBarcode) {
+    if (item.barcode && item.barcode !== line.pendingBarcode) {
+      throw new Error(`${item.name} was linked to a different barcode on another device. Refresh before confirming.`);
+    }
+    if (!item.barcode) await saveLinkedBarcode(item.id, line.pendingBarcode);
+  }
+  if (line.auditPending) {
+    await appendStockAudit(line.auditPending);
+    line.auditPending = null;
+    return;
+  }
+  const quantity = stockMode === "count" ? Number(line.countedQuantity) : Number(line.scannedQuantity);
+  if (!Number.isInteger(quantity) || quantity < 0 || (stockMode !== "count" && quantity < 1)) {
+    throw new Error(`Enter a valid whole-number quantity for ${item.name}.`);
+  }
+  let beforeStock = 0;
+  let afterStock = quantity;
+  let changeAmount = quantity;
+  if (realtimeEnabled) {
+    const result = await ordersDatabase.ref("menu").child(item.id).child("stock").transaction(current => {
+      if (typeof current !== "number" || !Number.isFinite(current) || current < 0) return;
+      beforeStock = current;
+      const next = stockMode === "count"
+        ? quantity
+        : stockMode === "waste"
+          ? current - quantity
+          : current + quantity;
+      if (next < 0) return;
+      return next;
+    }, undefined, false);
+    if (!result.committed) throw new Error(stockMode === "waste"
+      ? `There is not enough stock to remove ${quantity} from ${item.name}.`
+      : `Stock for ${item.name} changed on another device. Refresh the session and try again.`);
+    afterStock = Number(result.snapshot.val());
+  } else {
+    beforeStock = Number(item.stock);
+    afterStock = stockMode === "count" ? quantity : stockMode === "waste" ? beforeStock - quantity : beforeStock + quantity;
+    if (afterStock < 0) throw new Error(`There is not enough stock to remove ${quantity} from ${item.name}.`);
+    item.stock = afterStock;
+    write(STORAGE.menu, menu);
+  }
+  changeAmount = afterStock - beforeStock;
+  const auditEntry = {
+    staffUid: profile.id,
+    itemId: item.id,
+    itemName: item.name,
+    mode: stockMode,
+    changeAmount,
+    reason: reason.trim(),
+    timestamp: Date.now(),
+    beforeStock,
+    afterStock,
+    barcode: line.pendingBarcode || item.barcode || ""
+  };
+  line.confirmed = true;
+  line.auditPending = auditEntry;
+  try {
+    await appendStockAudit(auditEntry);
+    line.auditPending = null;
+  } catch (error) {
+    error.stockApplied = true;
+    throw error;
+  }
+}
+
+async function confirmStockSession(button) {
+  if (!stockSession.length) return;
+  const reason = document.getElementById("stock-reason")?.value.trim() || "";
+  if (stockMode === "waste" && !reason) {
+    document.getElementById("stock-reason")?.focus();
+    toast("Enter a reason before confirming waste or stock adjustment.");
+    return;
+  }
+  if (!window.confirm(`Confirm ${stockSession.length} stock change${stockSession.length === 1 ? "" : "s"}?`)) return;
+  button.disabled = true;
+  const reasonInput = reason || (stockMode === "receive" ? "Stock received" : "Stock count");
+  try {
+    for (const line of stockSession) {
+      if (line.confirmed && !line.auditPending) continue;
+      try {
+        await applyStockSessionLine(line, reasonInput);
+      } catch (error) {
+        if (error.stockApplied) line.confirmed = true;
+        renderStockSession();
+        throw error;
+      }
+    }
+    stockSession = [];
+    stockUndoStack = [];
+    stockScanCodeMap.clear();
+    pendingStockCodes.clear();
+    renderStaff();
+    toast(realtimeEnabled ? "Stock changes confirmed and audited." : "Stock changes saved to this device and added to the local audit log.");
+  } catch (error) {
+    console.error("Unable to confirm stock session.", error);
+    renderStockSession();
+    toast(`Stock session stopped: ${error.message || "Check connection and staff permissions."}`);
+  } finally {
+    if (button.isConnected) button.disabled = !stockSession.length;
+  }
+}
+
+async function createStockLabel(itemId) {
+  const item = menu.find(food => food.id === itemId);
+  if (!item) return;
+  let barcode = item.barcode;
+  if (!barcode) {
+    barcode = `CS${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    try {
+      await saveLinkedBarcode(item.id, barcode);
+    } catch (error) {
+      console.error("Unable to save the generated product code.", error);
+      toast(`Could not generate the label: ${error.message}`);
+      return;
+    }
+  }
+  const matrix = createQrMatrix(barcode);
+  if (!matrix) {
+    toast("Could not create a QR label for this code.");
+    return;
+  }
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal stock-label-modal" role="dialog" aria-modal="true" aria-labelledby="stock-label-title"><div class="modal-head"><h2 id="stock-label-title">Product label</h2><button class="close-button" data-close aria-label="Close">×</button></div><div class="stock-label-print"><strong>${escapeHTML(item.name)}</strong><canvas id="stock-label-qr" aria-label="QR code for ${escapeHTML(item.name)}"></canvas><code>${escapeHTML(barcode)}</code></div><p class="field-help">Print and attach this QR label to the canteen-made product. The code links to this menu item.</p><button id="print-stock-label" class="primary" type="button">Print label</button></section></div>`;
+  bindModalClose();
+  drawQrCode(document.getElementById("stock-label-qr"), matrix);
+  document.getElementById("print-stock-label")?.addEventListener("click", () => window.print());
+}
+
 function renderStaff() {
+  if (stockCameraActive) stopStockCamera();
   const name = escapeHTML(profile.name);
   const dailyOrders = todayOrders();
   const sales = dailyOrders.filter(order => order.status === "Completed").reduce((sum, order) =>
     sum + Math.max(0, Number(order.total || 0) - Number(order.walletDiscount || 0)), 0);
   document.getElementById("app").innerHTML = `<div class="app-shell">  <header class="topbar"><div class="brand"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em><span class="brand-role-label" style="font:600 11px 'DM Sans';color:#78827b;letter-spacing:0;margin-left:4px">STAFF</span></div><div class="top-actions"><button class="share-button" data-install-app aria-label="Add to Home Screen" type="button">＋ Add to Home Screen</button><button class="share-button" data-share-app type="button">▦ Share app</button><button class="icon-button" id="logout" aria-label="Sign out">Sign out</button><button class="user-chip profile-trigger" type="button" data-open-profile aria-label="Open profile for ${name}"><span class="avatar">${profile.photoData ? `<img src="${escapeHTML(profile.photoData)}" alt="">` : name.charAt(0)}</span><span class="user-name">${name}</span></button></div></header>
     <main class="staff-page"><div class="staff-header"><div><div class="eyebrow">Canteen operations</div><h1>Good day, ${name.split(" ")[0]}</h1><p class="subtle" style="margin:0">Manage today's orders, stock and menu.</p></div><span class="live-pill ${realtimeStatus === "error" ? "sync-error" : ""}">${realtimeEnabled ? `● ${realtimeStatus === "live" ? "LIVE SYNC" : realtimeStatus === "error" ? "SYNC ERROR" : "CONNECTING"}` : "● THIS DEVICE ONLY"}</span></div>
-    <div class="stats-grid" style="margin-bottom:20px"><div class="stat-card"><span>Today's orders</span><strong>${dailyOrders.length}</strong></div><div class="stat-card"><span>Today's completed sales</span><strong>${money(sales)}</strong></div><div class="stat-card"><span>Menu items</span><strong>${menu.length}</strong></div><div class="stat-card"><span>Low stock items</span><strong>${menu.filter(item => item.stock <= 5).length}</strong></div></div>
-    <nav class="staff-nav">${["Orders", "Stock", "Menu", "Payments"].map(tab => `<button class="nav-tab ${staffTab === tab ? "active" : ""}" data-staff-tab="${tab}">${tab}</button>`).join("")}</nav>
-    <section class="staff-content">${staffTab === "Orders" ? staffOrdersContent() : staffTab === "Stock" ? staffStockContent() : staffTab === "Menu" ? staffMenuContent() : staffPaymentsContent()}</section>
+    <div class="stats-grid" style="margin-bottom:20px"><div class="stat-card"><span>Today's orders</span><strong>${dailyOrders.length}</strong></div><div class="stat-card"><span>Today's completed sales</span><strong>${money(sales)}</strong></div><div class="stat-card"><span>Menu items</span><strong>${menu.length}</strong></div><div class="stat-card"><span>Low stock items</span><strong>${menu.filter(item => item.stock <= lowStockThreshold).length}</strong></div></div>
+    <nav class="staff-nav">${["Orders", "Stock", "Scan Stock", "Menu", "Payments"].map(tab => `<button class="nav-tab ${staffTab === tab ? "active" : ""}" data-staff-tab="${tab}">${tab}</button>`).join("")}</nav>
+    <section class="staff-content">${staffTab === "Orders" ? staffOrdersContent() : staffTab === "Stock" ? staffStockContent() : staffTab === "Scan Stock" ? scanStockContent() : staffTab === "Menu" ? staffMenuContent() : staffPaymentsContent()}</section>
     <p class="footer-note">${realtimeEnabled ? "Live order queue connected to Firebase. Only staff UIDs allowlisted in Realtime Database rules can view or update the shared queue." : "Staff mode is a local demo. Orders and edits are stored in this browser and are not shared across devices."}</p></main>
     <div id="modal-root"></div></div>`;
   document.getElementById("logout").addEventListener("click", logout);
@@ -1388,6 +1870,76 @@ function renderStaff() {
   bindShareApp();
   bindInstallApp();
   document.querySelectorAll("[data-staff-tab]").forEach(button => button.addEventListener("click", () => { staffTab = button.dataset.staffTab; renderStaff(); }));
+  document.getElementById("stock-mode")?.addEventListener("change", event => {
+    const nextMode = event.currentTarget.value;
+    if (stockSession.length && !window.confirm("Changing stock mode clears the unconfirmed session. Continue?")) {
+      event.currentTarget.value = stockMode;
+      return;
+    }
+    if (nextMode !== stockMode) {
+      stockSession = [];
+      stockUndoStack = [];
+      stockScanCodeMap.clear();
+      pendingStockCodes.clear();
+      stockMode = nextMode;
+      renderStaff();
+    }
+  });
+  document.getElementById("low-stock-threshold")?.addEventListener("change", async event => {
+    const value = Number(event.currentTarget.value);
+    if (!Number.isInteger(value) || value < 0 || value > 10000) {
+      event.currentTarget.value = String(lowStockThreshold);
+      toast("Low-stock threshold must be a whole number from 0 to 10,000.");
+      return;
+    }
+    try {
+      if (realtimeEnabled) {
+        await ordersDatabase.ref("stockSettings/lowStockThreshold").set(value);
+      } else {
+        write(STORAGE.lowStockThreshold, value);
+      }
+      lowStockThreshold = value;
+      toast(`Low-stock alert threshold set to ${value}.`);
+    } catch (error) {
+      console.error("Unable to save the low-stock threshold.", error);
+      event.currentTarget.value = String(lowStockThreshold);
+      toast("Could not save the threshold. Check Firebase staff permissions.");
+    }
+  });
+  document.getElementById("stock-manual-form")?.addEventListener("submit", event => {
+    event.preventDefault();
+    const input = document.getElementById("stock-manual-code");
+    const code = input.value.trim();
+    if (!code) return;
+    addStockScan(code);
+    input.value = "";
+    input.focus();
+  });
+  document.getElementById("start-stock-camera")?.addEventListener("click", startStockCamera);
+  document.getElementById("stop-stock-camera")?.addEventListener("click", stopStockCamera);
+  document.getElementById("undo-stock-scan")?.addEventListener("click", () => {
+    const last = stockUndoStack.pop();
+    if (!last) return;
+    const line = stockSession.find(entry => entry.itemId === last.itemId);
+    if (line && !line.confirmed) {
+      const property = last.mode === "count" ? "countedQuantity" : "scannedQuantity";
+      line[property] = Math.max(0, Number(line[property] || 0) - 1);
+      if (line[property] === 0) stockSession = stockSession.filter(entry => entry !== line);
+      renderStockSession();
+    }
+    showStockScanStatus("Undid the last scan.");
+  });
+  document.getElementById("clear-stock-session")?.addEventListener("click", () => {
+    if (stockSession.length && !window.confirm("Clear all unconfirmed stock changes?")) return;
+    stockSession = [];
+    stockUndoStack = [];
+    stockScanCodeMap.clear();
+    pendingStockCodes.clear();
+    renderStockSession();
+    showStockScanStatus("Session cleared. No stock was changed.");
+  });
+  document.getElementById("confirm-stock-session")?.addEventListener("click", event => confirmStockSession(event.currentTarget));
+  document.querySelectorAll("[data-stock-label]").forEach(button => button.addEventListener("click", () => createStockLabel(button.dataset.stockLabel)));
   document.querySelectorAll("[data-sales-period]").forEach(button => button.addEventListener("click", () => {
     salesPeriod = button.dataset.salesPeriod;
     selectedSalesBucket = null;
@@ -1505,24 +2057,26 @@ function renderStaff() {
   });
   document.getElementById("gcash-qr-form")?.addEventListener("submit", saveGcashQr);
   document.getElementById("remove-gcash-qr")?.addEventListener("click", removeGcashQr);
-  document.querySelectorAll("[data-stock]").forEach(input => input.addEventListener("change", () => {
+  document.querySelectorAll("[data-stock]").forEach(input => input.addEventListener("change", async () => {
     const item = menu.find(food => food.id === input.dataset.stock);
     if (!item) return;
     const updatedStock = Math.max(0, Number(input.value) || 0);
-    if (realtimeEnabled) {
-      ordersDatabase.ref("menu").child(item.id).child("stock").set(updatedStock).then(() => {
-        toast(`${item.name} stock updated.`);
-      }).catch(error => {
-        console.error("Unable to update shared stock.", error);
-        toast("Could not update stock. Check staff access and your connection.");
-        renderStaff();
-      });
+    if (!Number.isInteger(updatedStock)) {
+      toast("Stock must be a whole number.");
+      renderStaff();
       return;
     }
-    item.stock = updatedStock;
-    write(STORAGE.menu, menu);
-    renderStaff();
-    toast(`${item.name} stock updated.`);
+    try {
+      await applyManualStockValue(item, updatedStock, "Manual stock tracker update");
+      renderStaff();
+      toast(`${item.name} stock updated and audited.`);
+    } catch (error) {
+      console.error("Unable to update and audit stock.", error);
+      renderStaff();
+      toast(error.stockApplied
+        ? `Stock for ${item.name} changed, but audit logging failed. Retry only after checking the audit log.`
+        : "Could not update stock. Check staff access and your connection.");
+    }
   }));
   document.getElementById("add-menu-item")?.addEventListener("click", () => openMenuEditor());
   document.querySelectorAll("[data-edit-menu]").forEach(button => button.addEventListener("click", () => openMenuEditor(button.dataset.editMenu)));
@@ -1829,7 +2383,11 @@ function resizeGcashQr(file) {
 }
 
 function staffStockContent() {
-  return `<div class="section-heading" style="margin-top:0"><div><h2>Stock tracker</h2><p class="subtle" style="margin:5px 0 0">Update quantities as canteen stock changes.</p></div></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji" aria-hidden="true">🍽️</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="${item.stock <= 5 ? "stock-low" : "subtle"}" style="font-size:11px;margin-top:3px">${item.stock <= 5 ? "Low stock · " : ""}${item.stock} available</div></div></div><label style="font-size:11px;color:#79847b">Stock <input data-stock="${escapeHTML(item.id)}" type="number" min="0" value="${item.stock}" style="width:66px;padding:7px;border:1px solid var(--line);border-radius:8px;margin-left:5px"></label></div>`).join("")}`;
+  const lowStockItems = menu.filter(item => Number(item.stock) <= lowStockThreshold);
+  const alert = lowStockItems.length
+    ? `<div class="stock-low-alert" role="status"><strong>Low-stock alert</strong><span>${lowStockItems.map(item => `${escapeHTML(item.name)} (${Number(item.stock)})`).join(" · ")}</span></div>`
+    : "";
+  return `${alert}<div class="section-heading" style="margin-top:0"><div><h2>Stock tracker</h2><p class="subtle" style="margin:5px 0 0">Update quantities, review low stock, and print item labels.</p></div></div>${menu.map(item => `<div class="staff-item"><div class="staff-item-name">${item.image ? `<img class="staff-menu-image" src="${escapeHTML(item.image)}" alt="">` : `<span class="small-emoji" aria-hidden="true">🍽️</span>`}<div><strong style="font-size:13px">${escapeHTML(item.name)}</strong><div class="${item.stock <= lowStockThreshold ? "stock-low" : "subtle"}" style="font-size:11px;margin-top:3px">${item.stock === 0 ? "Sold out · " : item.stock <= lowStockThreshold ? "Low stock · " : ""}${item.stock} available${item.barcode ? ` · ${escapeHTML(item.barcode)}` : ""}</div></div></div><div class="stock-row-actions"><label style="font-size:11px;color:#79847b">Stock <input data-stock="${escapeHTML(item.id)}" type="number" min="0" step="1" value="${item.stock}" aria-label="Set stock for ${escapeHTML(item.name)}"></label><button class="secondary" type="button" data-stock-label="${escapeHTML(item.id)}">${item.barcode ? "Print label" : "Generate label"}</button></div></div>`).join("")}`;
 }
 
 function staffMenuContent() {
@@ -1837,10 +2395,10 @@ function staffMenuContent() {
 }
 
 function openMenuEditor(id = "") {
-  const item = menu.find(food => food.id === id) || { name: "", category: "Meals", description: "", price: "", stock: 0, tag: "", image: "" };
+  const item = menu.find(food => food.id === id) || { name: "", category: "Meals", description: "", price: "", stock: 0, tag: "", image: "", barcode: "" };
   const startingStock = Number(item.stock);
   let image = item.image || "";
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div><div class="field"><label for="item-image-gallery">Choose a photo from your gallery</label><input id="item-image-gallery" name="image" type="file" accept="image/*"><img id="item-image-preview" class="menu-image-preview" src="${escapeHTML(image)}" alt="Product photo preview" ${image ? "" : "hidden"}><button class="secondary" id="remove-item-image" type="button" ${image ? "" : "hidden"}>Remove photo</button><span class="field-help">Choose a photo from your album or use your phone's photo picker. The image is resized before it is saved.</span></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" value="${item.stock}" required></div></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div><div class="field"><label for="item-barcode">Barcode (optional)</label><input id="item-barcode" name="barcode" maxlength="120" value="${escapeHTML(item.barcode || "")}" placeholder="Scan or type a product code"></div><div class="field"><label for="item-image-gallery">Choose a photo from your gallery</label><input id="item-image-gallery" name="image" type="file" accept="image/*"><img id="item-image-preview" class="menu-image-preview" src="${escapeHTML(image)}" alt="Product photo preview" ${image ? "" : "hidden"}><button class="secondary" id="remove-item-image" type="button" ${image ? "" : "hidden"}>Remove photo</button><span class="field-help">Choose a photo from your album or use your phone's photo picker. The image is resized before it is saved.</span></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" step="1" value="${item.stock}" required></div></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
   bindModalClose();
   const imagePreview = document.getElementById("item-image-preview");
   const removeImage = document.getElementById("remove-item-image");
@@ -1878,10 +2436,17 @@ function openMenuEditor(id = "") {
       category: data.get("category"),
       price: Number(data.get("price")),
       stock: Math.max(0, Number(data.get("stock"))),
+      barcode: String(data.get("barcode") || "").trim(),
       tag: item.tag || "",
       image,
       sortOrder: Number(item.sortOrder ?? (id ? menu.findIndex(food => food.id === id) : menu.length))
     };
+    const requestedStock = updated.stock;
+    const duplicateBarcode = updated.barcode && menu.find(food => food.id !== id && food.barcode === updated.barcode);
+    if (duplicateBarcode) {
+      toast(`That code is already linked to ${duplicateBarcode.name}.`);
+      return;
+    }
     const submitButton = event.currentTarget.querySelector("button[type='submit']");
     if (submitButton) submitButton.disabled = true;
     try {
@@ -1890,7 +2455,7 @@ function openMenuEditor(id = "") {
           const next = {
             ...(current || {}),
             ...updated,
-            stock: updated.stock === startingStock ? current?.stock ?? updated.stock : updated.stock
+            stock: current?.stock ?? updated.stock
           };
           delete next.points;
           delete next.emoji;
@@ -1898,13 +2463,22 @@ function openMenuEditor(id = "") {
         }, undefined, false);
         if (!result.committed) throw new Error("The shared menu item could not be updated.");
         Object.assign(updated, result.snapshot.val());
+        if (requestedStock !== startingStock) {
+          await applyManualStockValue(item, requestedStock, "Menu editor stock update");
+          updated.stock = item.stock;
+        }
       } else if (realtimeEnabled) {
         await ordersDatabase.ref("menu").child(updated.id).set(updated);
+      } else if (id && requestedStock !== startingStock) {
+        await applyManualStockValue(item, requestedStock, "Menu editor stock update");
+        updated.stock = item.stock;
       }
     } catch (error) {
       console.error("Unable to publish menu change.", error);
       if (submitButton) submitButton.disabled = false;
-      toast("Menu was not published. Check staff access and your connection.");
+      toast(error.stockApplied
+        ? "Menu was saved, but stock audit logging failed. Check the stock audit log."
+        : "Menu was not published. Check staff access and your connection.");
       return;
     }
     menu = id ? menu.map(food => food.id === id ? updated : food) : [...menu, updated];
@@ -1971,6 +2545,11 @@ async function logout() {
     paymentSettingsSubscription.off("value");
     paymentSettingsSubscription = null;
   }
+  if (stockSettingsSubscription) {
+    stockSettingsSubscription.off("value");
+    stockSettingsSubscription = null;
+  }
+  if (stockCameraActive) await stopStockCamera();
   if (realtimeEnabled) {
     firebaseAuth.signOut().catch(error => console.error("Unable to sign out of Firebase.", error));
   }
