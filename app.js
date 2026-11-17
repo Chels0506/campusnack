@@ -185,27 +185,52 @@ async function refreshNotificationControls() {
   if (!button || !message) return;
   button.disabled = true;
   if (!realtimeEnabled || !firebaseAuth?.currentUser || firebaseAuth.currentUser.uid !== profile?.id) {
-    button.textContent = "Notifications unavailable";
+    button.textContent = "Enable order notifications";
+    button.disabled = false;
     message.textContent = "Sign in with a connected Firebase account to enable phone alerts.";
     return;
   }
-  if (typeof Notification === "undefined" || !navigator.serviceWorker || !window.isSecureContext) {
-    button.textContent = "Notifications unavailable";
-    message.textContent = "Notifications require a supported browser and a secure HTTPS connection.";
+  if (location.protocol === "file:" || typeof Notification === "undefined" || !navigator.serviceWorker || !window.isSecureContext) {
+    button.textContent = "Enable order notifications";
+    button.disabled = false;
+    message.textContent = location.protocol === "file:"
+      ? "Open the published app over HTTPS; notifications cannot be enabled from a file opened on this device."
+      : "Notifications require a supported browser and a secure HTTPS connection.";
     return;
   }
   try {
-    if (!(await window.firebase.messaging.isSupported())) {
-      button.textContent = "Notifications unavailable";
+    if (!window.firebase?.messaging || typeof window.firebase.messaging.isSupported !== "function" ||
+        !(await window.firebase.messaging.isSupported())) {
+      button.textContent = "Enable order notifications";
+      button.disabled = false;
       message.textContent = /iPhone|iPad|iPod/i.test(navigator.userAgent)
         ? "On iPhone or iPad, add CampuSnack to the Home Screen and open the installed app first."
         : "This browser does not support web push notifications.";
       return;
     }
-    const snapshot = await notificationTokenReference(profile.id).once("value");
-    const registered = snapshot.exists();
+    if (!window.CAMPUSNACK_VAPID_KEY) {
+      button.textContent = "Enable order notifications";
+      button.disabled = false;
+      message.textContent = "Push notifications are not configured for this app. Contact the app administrator.";
+      return;
+    }
+    const tokenReference = notificationTokenReference(profile.id);
+    const snapshot = await tokenReference.once("value");
+    const registration = snapshot.val();
+    const registered = typeof registration?.token === "string" && registration.token.length > 0;
+    if (registered && Notification.permission === "granted") {
+      const messaging = await getFirebaseMessaging();
+      const serviceWorkerRegistration = await navigator.serviceWorker.ready;
+      const currentToken = await messaging.getToken({
+        vapidKey: window.CAMPUSNACK_VAPID_KEY,
+        serviceWorkerRegistration
+      });
+      if (currentToken && currentToken !== registration.token) {
+        await tokenReference.set({ token: currentToken, updatedAt: Date.now() });
+      }
+    }
     button.textContent = registered ? "Turn off on this device" : "Enable order notifications";
-    button.disabled = Notification.permission === "denied" && !registered;
+    button.disabled = false;
     message.textContent = Notification.permission === "denied"
       ? "Notifications are blocked in this browser. Allow them in the browser or device settings."
       : registered
@@ -213,7 +238,8 @@ async function refreshNotificationControls() {
         : "Alerts are sent to this device only after you enable them.";
   } catch (error) {
     console.error("Unable to check CampuSnack notification settings.", error);
-    button.textContent = "Notifications unavailable";
+    button.textContent = "Enable order notifications";
+    button.disabled = false;
     message.textContent = "Could not check notification settings. Check your connection and Firebase rules.";
   }
 }
@@ -222,6 +248,37 @@ async function toggleNotificationSubscription(button) {
   const message = document.getElementById("notification-status");
   button.disabled = true;
   try {
+    if (!realtimeEnabled || !firebaseAuth?.currentUser || firebaseAuth.currentUser.uid !== profile?.id) {
+      throw new Error("Sign in with your Firebase account on the published app to enable order notifications.");
+    }
+    if (location.protocol === "file:" || typeof Notification === "undefined" || !navigator.serviceWorker || !window.isSecureContext) {
+      throw new Error(location.protocol === "file:"
+        ? "Open the published app over HTTPS; notifications cannot be enabled from a file opened on this device."
+        : "Notifications require a supported browser and a secure HTTPS connection.");
+    }
+    if (!window.firebase?.messaging || typeof window.firebase.messaging.isSupported !== "function" ||
+        !(await window.firebase.messaging.isSupported())) {
+      throw new Error(/iPhone|iPad|iPod/i.test(navigator.userAgent)
+        ? "On iPhone or iPad, add CampuSnack to the Home Screen and open the installed app first."
+        : "This browser does not support web push notifications.");
+    }
+    if (!window.CAMPUSNACK_VAPID_KEY) {
+      throw new Error("Push notifications are not configured for this app. Contact the app administrator.");
+    }
+    const enabling = button.textContent.trim() === "Enable order notifications";
+    if (enabling) {
+      if (Notification.permission === "denied") {
+        throw new Error("Notifications are blocked. Allow them in your browser or device settings, then try again.");
+      }
+      const permission = Notification.permission === "granted"
+        ? "granted"
+        : await Notification.requestPermission();
+      if (permission !== "granted") {
+        if (message) message.textContent = "Notification permission was not granted. Allow notifications in browser settings, then try again.";
+        await refreshNotificationControls();
+        return;
+      }
+    }
     const tokenReference = notificationTokenReference(profile.id);
     const savedToken = await tokenReference.once("value");
     if (savedToken.exists()) {
@@ -240,19 +297,11 @@ async function toggleNotificationSubscription(button) {
       await refreshNotificationControls();
       return;
     }
-    if (Notification.permission === "denied") {
-      throw new Error("Notifications are blocked. Allow them in your browser or device settings, then try again.");
-    }
-    const permission = Notification.permission === "granted"
-      ? "granted"
-      : await Notification.requestPermission();
-    if (permission !== "granted") {
-      if (message) message.textContent = "Notification permission was not granted. You can enable it later in browser settings.";
-      await refreshNotificationControls();
-      return;
-    }
     const messaging = await getFirebaseMessaging();
     const registration = await navigator.serviceWorker.ready;
+    if (!window.CAMPUSNACK_VAPID_KEY) {
+      throw new Error("Push notifications are not configured for this app. Contact the app administrator.");
+    }
     const token = await messaging.getToken({
       vapidKey: window.CAMPUSNACK_VAPID_KEY,
       serviceWorkerRegistration: registration
@@ -265,7 +314,7 @@ async function toggleNotificationSubscription(button) {
     console.error("Unable to update CampuSnack notification settings.", error);
     if (message) message.textContent = error.message || "Could not update notification settings.";
     toast(error.message || "Could not update notification settings. Check your connection and Firebase rules.");
-    button.disabled = false;
+    await refreshNotificationControls();
   }
 }
 
@@ -1655,14 +1704,14 @@ async function stopStockCamera() {
   if (cameraView) cameraView.hidden = true;
 }
 
-async function saveLinkedBarcode(itemId, barcode) {
+async function saveLinkedBarcode(itemId, barcode, expectedPreviousBarcode = "") {
   const item = menu.find(food => food.id === itemId);
   if (!item) throw new Error("That menu item is no longer available.");
   const duplicate = menu.find(food => food.id !== itemId && food.barcode === barcode);
   if (duplicate) throw new Error(`This code is already linked to ${duplicate.name}.`);
   if (realtimeEnabled) {
     const result = await ordersDatabase.ref("menu").child(itemId).transaction(current => {
-      if (!current || (current.barcode && current.barcode !== barcode)) return;
+      if (!current || (current.barcode && current.barcode !== barcode && current.barcode !== expectedPreviousBarcode)) return;
       return { ...current, barcode };
     }, undefined, false);
     if (!result.committed) throw new Error("This menu item changed on another device. Refresh and retry the barcode link.");
@@ -1834,14 +1883,15 @@ function isLegacyStockLabelCode(code) {
 async function createStockLabel(itemId) {
   const item = menu.find(food => food.id === itemId);
   if (!item) return;
-  let barcode = isLegacyStockLabelCode(item.barcode) ? "" : item.barcode;
+  const previousBarcode = item.barcode || "";
+  let barcode = isLegacyStockLabelCode(previousBarcode) ? "" : previousBarcode;
   if (!barcode) {
     const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
     do {
       barcode = `C${Array.from({ length: 5 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("")}`;
     } while (menu.some(food => food.barcode === barcode));
     try {
-      await saveLinkedBarcode(item.id, barcode);
+      await saveLinkedBarcode(item.id, barcode, previousBarcode);
     } catch (error) {
       console.error("Unable to save the generated product code.", error);
       toast(`Could not generate the label: ${error.message}`);
@@ -2405,7 +2455,7 @@ function openMenuEditor(id = "") {
   const item = menu.find(food => food.id === id) || { name: "", category: "Meals", description: "", price: "", stock: 0, tag: "", image: "", barcode: "" };
   const startingStock = Number(item.stock);
   let image = item.image || "";
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div><div class="field"><label for="item-barcode">Barcode (optional)</label><input id="item-barcode" name="barcode" maxlength="120" value="${escapeHTML(item.barcode || "")}" placeholder="Scan or type a product code"></div><div class="field"><label for="item-image-gallery">Choose a photo from your gallery</label><input id="item-image-gallery" name="image" type="file" accept="image/*"><img id="item-image-preview" class="menu-image-preview" src="${escapeHTML(image)}" alt="Product photo preview" ${image ? "" : "hidden"}><button class="secondary" id="remove-item-image" type="button" ${image ? "" : "hidden"}>Remove photo</button><span class="field-help">Choose a photo from your album or use your phone's photo picker. The image is resized before it is saved.</span></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" step="1" value="${item.stock}" required></div></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="menu-editor-title"><div class="modal-head"><h2 id="menu-editor-title">${id ? "Edit menu item" : "Add menu item"}</h2><button class="close-button" data-close aria-label="Close">×</button></div><form id="menu-editor-form"><div class="field"><label for="item-name">Item name</label><input id="item-name" name="name" required value="${escapeHTML(item.name)}"></div><div class="field"><label for="item-description">Description</label><input id="item-description" name="description" required value="${escapeHTML(item.description)}"></div><div class="field"><label for="item-category">Category</label><select id="item-category" name="category">${["Meals", "Snacks", "Drinks", "Rice dishes"].map(category => `<option ${category === item.category ? "selected" : ""}>${category}</option>`).join("")}</select></div>${id ? `<div class="field"><label for="item-barcode">Barcode</label><input id="item-barcode" name="barcode" maxlength="120" value="${escapeHTML(item.barcode || "")}" placeholder="Scan or type a product code"></div>` : ""}<div class="field"><label for="item-image-gallery">Choose a photo from your gallery</label><input id="item-image-gallery" name="image" type="file" accept="image/*"><img id="item-image-preview" class="menu-image-preview" src="${escapeHTML(image)}" alt="Product photo preview" ${image ? "" : "hidden"}><button class="secondary" id="remove-item-image" type="button" ${image ? "" : "hidden"}>Remove photo</button><span class="field-help">Choose a photo from your album or use your phone's photo picker. The image is resized before it is saved.</span></div><div class="field-grid"><div class="field"><label for="item-price">Price (₱)</label><input id="item-price" name="price" type="number" min="0" step="0.01" value="${item.price}" required></div><div class="field"><label for="item-stock">Stock</label><input id="item-stock" name="stock" type="number" min="0" step="1" value="${item.stock}" required></div></div><button class="primary" type="submit">Save menu item</button></form></section></div>`;
   bindModalClose();
   const imagePreview = document.getElementById("item-image-preview");
   const removeImage = document.getElementById("remove-item-image");
@@ -2443,7 +2493,7 @@ function openMenuEditor(id = "") {
       category: data.get("category"),
       price: Number(data.get("price")),
       stock: Math.max(0, Number(data.get("stock"))),
-      barcode: String(data.get("barcode") || "").trim(),
+      barcode: String(data.get("barcode") || item.barcode || "").trim(),
       tag: item.tag || "",
       image,
       sortOrder: Number(item.sortOrder ?? (id ? menu.findIndex(food => food.id === id) : menu.length))
