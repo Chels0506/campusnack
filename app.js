@@ -5,7 +5,7 @@ const STORAGE = {
   likes: "campusnack.likes",
   gcashQr: "campusnack.gcashQr",
   orderCounter: "campusnack.orderCounter",
-  notificationDeviceId: "campusnack.notificationDeviceId",
+  foregroundNotifications: "campusnack.foregroundNotifications",
   stockAudit: "campusnack.stockAudit",
   lowStockThreshold: "campusnack.lowStockThreshold"
 };
@@ -63,8 +63,6 @@ let toastTimer;
 let installPrompt = null;
 let firebaseAuth = null;
 let ordersDatabase = null;
-let firebaseMessaging = null;
-let messagingListenerAttached = false;
 let orderSubscription = null;
 let menuSubscription = null;
 let paymentSettingsSubscription = null;
@@ -139,182 +137,120 @@ function toast(message) {
   toastTimer = setTimeout(() => node.remove(), 2600);
 }
 
-function notificationTokenReference(uid) {
-  let deviceId = read(STORAGE.notificationDeviceId, "");
-  if (!deviceId) {
-    deviceId = ordersDatabase.ref().push().key;
-    if (!deviceId) throw new Error("Could not create a notification device ID.");
-    write(STORAGE.notificationDeviceId, deviceId);
-  }
-  return ordersDatabase.ref("notificationTokens").child(uid).child(deviceId);
+function foregroundNotificationsEnabled(uid = profile?.id) {
+  const enabledUsers = read(STORAGE.foregroundNotifications, []);
+  return Boolean(uid && Array.isArray(enabledUsers) && enabledUsers.includes(uid));
 }
 
-async function getFirebaseMessaging() {
-  if (!window.firebase?.messaging || typeof window.firebase.messaging.isSupported !== "function") {
-    throw new Error("Firebase Messaging did not load. Reload the app while connected to the internet.");
+function setForegroundNotificationsEnabled(uid, enabled) {
+  const savedUsers = read(STORAGE.foregroundNotifications, []);
+  const enabledUsers = new Set(Array.isArray(savedUsers) ? savedUsers.filter(userId => typeof userId === "string") : []);
+  if (enabled) enabledUsers.add(uid);
+  else enabledUsers.delete(uid);
+  write(STORAGE.foregroundNotifications, [...enabledUsers]);
+}
+
+async function showForegroundNotification(title, body, tag) {
+  const options = {
+    body,
+    icon: "./icons/icon-192.png",
+    badge: "./icons/icon-192.png",
+    tag,
+    data: { url: APP_PUBLIC_URL }
+  };
+  if (navigator.serviceWorker && window.isSecureContext && location.protocol !== "file:") {
+    const registration = await navigator.serviceWorker.ready;
+    await registration.showNotification(title, options);
+    return;
   }
-  if (!(await window.firebase.messaging.isSupported())) {
-    throw new Error("This browser does not support CampuSnack push notifications. On iPhone, install the app from Safari's Share menu first.");
+  new Notification(title, options);
+}
+
+async function notifyForegroundOrder(title, body, orderId, status) {
+  if (!foregroundNotificationsEnabled()) return;
+  toast(body);
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  try {
+    await showForegroundNotification(title, body, `campusnack-${profile.id}-${orderId}-${status}`);
+  } catch (error) {
+    console.error("Unable to show a foreground order notification.", error);
   }
-  if (!firebaseMessaging) firebaseMessaging = window.firebase.messaging();
-  if (!messagingListenerAttached) {
-    firebaseMessaging.onMessage(async payload => {
-      const data = payload.data || {};
-      if (Notification.permission !== "granted") return;
-      try {
-        const registration = await navigator.serviceWorker.ready;
-        await registration.showNotification(data.title || "CampuSnack update", {
-          body: data.body || "There is an update about CampuSnack.",
-          icon: "./icons/icon-192.png",
-          badge: "./icons/icon-192.png",
-          data: { url: data.url || "./" }
-        });
-      } catch (error) {
-        console.error("Unable to display a foreground CampuSnack notification.", error);
-        toast("A CampuSnack update arrived, but this device could not display its notification.");
-      }
-    });
-    messagingListenerAttached = true;
-  }
-  return firebaseMessaging;
 }
 
 async function refreshNotificationControls() {
   const button = document.getElementById("notification-toggle");
   const message = document.getElementById("notification-status");
   if (!button || !message) return;
-  button.disabled = true;
+  const enabled = foregroundNotificationsEnabled();
+  button.textContent = enabled ? "Turn off foreground alerts" : "Enable foreground alerts";
+  button.disabled = false;
   if (!realtimeEnabled || !firebaseAuth?.currentUser || firebaseAuth.currentUser.uid !== profile?.id) {
-    button.textContent = "Enable order notifications";
-    button.disabled = false;
-    message.textContent = "Sign in with a connected Firebase account to enable phone alerts.";
-    return;
-  }
-  if (location.protocol === "file:" || typeof Notification === "undefined" || !navigator.serviceWorker || !window.isSecureContext) {
-    button.textContent = "Enable order notifications";
-    button.disabled = false;
-    message.textContent = location.protocol === "file:"
-      ? "Open the published app over HTTPS; notifications cannot be enabled from a file opened on this device."
-      : "Notifications require a supported browser and a secure HTTPS connection.";
-    return;
-  }
-  try {
-    if (!window.firebase?.messaging || typeof window.firebase.messaging.isSupported !== "function" ||
-        !(await window.firebase.messaging.isSupported())) {
-      button.textContent = "Enable order notifications";
-      button.disabled = false;
-      message.textContent = /iPhone|iPad|iPod/i.test(navigator.userAgent)
-        ? "On iPhone or iPad, add CampuSnack to the Home Screen and open the installed app first."
-        : "This browser does not support web push notifications.";
-      return;
-    }
-    if (!window.CAMPUSNACK_VAPID_KEY) {
-      button.textContent = "Enable order notifications";
-      button.disabled = false;
-      message.textContent = "Push notifications are not configured for this app. Contact the app administrator.";
-      return;
-    }
-    const tokenReference = notificationTokenReference(profile.id);
-    const snapshot = await tokenReference.once("value");
-    const registration = snapshot.val();
-    const registered = typeof registration?.token === "string" && registration.token.length > 0;
-    if (registered && Notification.permission === "granted") {
-      const messaging = await getFirebaseMessaging();
-      const serviceWorkerRegistration = await navigator.serviceWorker.ready;
-      const currentToken = await messaging.getToken({
-        vapidKey: window.CAMPUSNACK_VAPID_KEY,
-        serviceWorkerRegistration
-      });
-      if (currentToken && currentToken !== registration.token) {
-        await tokenReference.set({ token: currentToken, updatedAt: Date.now() });
-      }
-    }
-    button.textContent = registered ? "Turn off on this device" : "Enable order notifications";
-    button.disabled = false;
-    message.textContent = Notification.permission === "denied"
-      ? "Notifications are blocked in this browser. Allow them in the browser or device settings."
-      : registered
-        ? "This device is set to receive CampuSnack order alerts."
-        : "Alerts are sent to this device only after you enable them.";
-  } catch (error) {
-    console.error("Unable to check CampuSnack notification settings.", error);
-    button.textContent = "Enable order notifications";
-    button.disabled = false;
-    message.textContent = "Could not check notification settings. Check your connection and Firebase rules.";
+    message.textContent = "Foreground order alerts require a signed-in Firebase account and live order sync.";
+  } else if (location.protocol === "file:" || !window.isSecureContext) {
+    message.textContent = "Open the published HTTPS app to enable device alerts.";
+  } else if (enabled && (typeof Notification === "undefined" || Notification.permission !== "granted")) {
+    message.textContent = "In-app alerts are enabled while CampuSnack is open. Device notifications are unavailable or blocked on this browser.";
+  } else if (typeof Notification !== "undefined" && Notification.permission === "denied") {
+    message.textContent = "Device notifications are blocked. You can still enable in-app alerts while CampuSnack is open.";
+  } else if (enabled) {
+    message.textContent = "Enabled on this device. Keep CampuSnack open to receive new-order or order-status alerts.";
+  } else if (typeof Notification === "undefined") {
+    message.textContent = "This browser has no device notifications; in-app alerts can still work while CampuSnack is open.";
+  } else {
+    message.textContent = "Alerts appear only while CampuSnack is open on this device.";
   }
 }
 
-async function toggleNotificationSubscription(button) {
+async function toggleForegroundNotifications(button) {
   const message = document.getElementById("notification-status");
   button.disabled = true;
   try {
-    if (!realtimeEnabled || !firebaseAuth?.currentUser || firebaseAuth.currentUser.uid !== profile?.id) {
-      throw new Error("Sign in with your Firebase account on the published app to enable order notifications.");
-    }
-    if (location.protocol === "file:" || typeof Notification === "undefined" || !navigator.serviceWorker || !window.isSecureContext) {
-      throw new Error(location.protocol === "file:"
-        ? "Open the published app over HTTPS; notifications cannot be enabled from a file opened on this device."
-        : "Notifications require a supported browser and a secure HTTPS connection.");
-    }
-    if (!window.firebase?.messaging || typeof window.firebase.messaging.isSupported !== "function" ||
-        !(await window.firebase.messaging.isSupported())) {
-      throw new Error(/iPhone|iPad|iPod/i.test(navigator.userAgent)
-        ? "On iPhone or iPad, add CampuSnack to the Home Screen and open the installed app first."
-        : "This browser does not support web push notifications.");
-    }
-    if (!window.CAMPUSNACK_VAPID_KEY) {
-      throw new Error("Push notifications are not configured for this app. Contact the app administrator.");
-    }
-    const enabling = button.textContent.trim() === "Enable order notifications";
-    if (enabling) {
-      if (Notification.permission === "denied") {
-        throw new Error("Notifications are blocked. Allow them in your browser or device settings, then try again.");
-      }
-      const permission = Notification.permission === "granted"
-        ? "granted"
-        : await Notification.requestPermission();
-      if (permission !== "granted") {
-        if (message) message.textContent = "Notification permission was not granted. Allow notifications in browser settings, then try again.";
-        await refreshNotificationControls();
-        return;
-      }
-    }
-    const tokenReference = notificationTokenReference(profile.id);
-    const savedToken = await tokenReference.once("value");
-    if (savedToken.exists()) {
-      await tokenReference.remove();
-      try {
-        const messaging = await getFirebaseMessaging();
-        await messaging.deleteToken();
-      } catch (error) {
-        console.error("Unable to clear the device's Firebase Messaging token.", error);
-        if (message) message.textContent = "Notifications are disabled for this account, but the browser could not clear its old token.";
-        toast("Notifications were removed from this account, but this browser could not clear the old token.");
-        await refreshNotificationControls();
-        return;
-      }
-      toast("Notifications turned off on this device.");
+    if (foregroundNotificationsEnabled()) {
+      setForegroundNotificationsEnabled(profile.id, false);
+      toast("Foreground order alerts turned off on this device.");
       await refreshNotificationControls();
       return;
     }
-    const messaging = await getFirebaseMessaging();
-    const registration = await navigator.serviceWorker.ready;
-    if (!window.CAMPUSNACK_VAPID_KEY) {
-      throw new Error("Push notifications are not configured for this app. Contact the app administrator.");
+    if (!realtimeEnabled || !firebaseAuth?.currentUser || firebaseAuth.currentUser.uid !== profile?.id) {
+      throw new Error("Sign in with your Firebase account on the published app to use foreground order alerts.");
     }
-    const token = await messaging.getToken({
-      vapidKey: window.CAMPUSNACK_VAPID_KEY,
-      serviceWorkerRegistration: registration
-    });
-    if (!token) throw new Error("Firebase did not return a notification token. Check the Firebase web-push key and try again.");
-    await tokenReference.set({ token, updatedAt: Date.now() });
-    toast("Order notifications enabled on this device.");
+    if (location.protocol === "file:" || !window.isSecureContext) {
+      throw new Error(location.protocol === "file:"
+        ? "Open the published app over HTTPS; alerts cannot be enabled from a file opened on this device."
+        : "Device notifications require a secure HTTPS connection.");
+    }
+    let permission = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+    if (permission !== "granted" && permission !== "denied" && permission !== "unsupported") {
+      try {
+        permission = await Notification.requestPermission();
+      } catch (error) {
+        console.error("Unable to request browser notification permission.", error);
+      }
+    }
+    setForegroundNotificationsEnabled(profile.id, true);
+    if (permission === "granted") {
+      await showForegroundNotification(
+        "CampuSnack alerts enabled",
+        "Keep CampuSnack open on this device to receive order alerts.",
+        `campusnack-alerts-enabled-${profile.id}`
+      );
+      toast("Foreground alerts enabled on this device.");
+    } else {
+      toast("In-app order alerts are enabled while CampuSnack is open.");
+    }
     await refreshNotificationControls();
+    if (permission !== "granted" && message) {
+      message.textContent = permission === "unsupported"
+        ? "In-app alerts are enabled while CampuSnack is open. This browser does not support device notifications."
+        : permission === "denied"
+          ? "In-app alerts are enabled while CampuSnack is open. Allow notifications in browser settings for device alerts."
+          : "In-app alerts are enabled while CampuSnack is open. Allow browser notifications if you also want device alerts.";
+    }
   } catch (error) {
-    console.error("Unable to update CampuSnack notification settings.", error);
-    if (message) message.textContent = error.message || "Could not update notification settings.";
-    toast(error.message || "Could not update notification settings. Check your connection and Firebase rules.");
+    console.error("Unable to update CampuSnack foreground alerts.", error);
+    toast(error.message || "Could not update foreground alerts.");
     await refreshNotificationControls();
+    if (message) message.textContent = error.message || "Could not update notification settings.";
   }
 }
 
@@ -598,11 +534,44 @@ function connectOrderSync() {
   const user = firebaseAuth.currentUser;
   const reference = ordersDatabase.ref("orders");
   const query = profile.role === "Staff" ? reference : reference.orderByChild("owner").equalTo(user.uid);
+  let previousOrders = null;
   orderSubscription = query;
   query.on("value", snapshot => {
+    if (!profile || firebaseAuth.currentUser?.uid !== user.uid) return;
     realtimeStatus = "live";
     const values = snapshot.val() || {};
-    orders = Object.entries(values).map(([id, order]) => ({ ...order, id }));
+    const nextOrders = Object.entries(values).map(([id, order]) => ({ ...order, id }));
+    if (previousOrders) {
+      if (profile.role === "Staff") {
+        nextOrders.forEach(order => {
+          if (!previousOrders.has(order.id) && order.owner !== user.uid) {
+            const code = String(order.displayId || order.id).slice(0, 40);
+            void notifyForegroundOrder("New CampuSnack order", `Order ${code} is ready to review.`, order.id, "new");
+          }
+        });
+      } else {
+        const statusMessages = {
+          Received: "Your order has been received.",
+          Preparing: "The canteen is preparing your order.",
+          "Ready for pickup": "Your order is ready for pickup.",
+          Completed: "Your order has been completed.",
+          Cancelled: "Your order was cancelled."
+        };
+        nextOrders.forEach(order => {
+          const previous = previousOrders.get(order.id);
+          if (previous && previous.status !== order.status) {
+            void notifyForegroundOrder(
+              "CampuSnack order update",
+              statusMessages[order.status] || `Your order status changed to ${order.status}.`,
+              order.id,
+              order.status
+            );
+          }
+        });
+      }
+    }
+    previousOrders = new Map(nextOrders.map(order => [order.id, order]));
+    orders = nextOrders;
     write(STORAGE.orders, orders);
     if (profile) render();
   }, error => {
@@ -1037,9 +1006,9 @@ function openProfileModal() {
   const avatar = profile.photoData
     ? `<img id="profile-photo-preview" class="profile-photo-preview" src="${escapeHTML(profile.photoData)}" alt="Profile photo">`
     : `<div id="profile-photo-placeholder" class="profile-photo-placeholder" aria-hidden="true">${escapeHTML(profile.name.charAt(0).toUpperCase())}</div>`;
-  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title"><div class="modal-head"><h2 id="profile-modal-title">Your profile</h2><button class="close-button" data-close aria-label="Close">×</button></div><div class="profile-photo-wrap">${avatar}</div><form id="profile-photo-form"><div class="field"><label for="profile-photo-gallery">Choose a photo from your gallery</label><input id="profile-photo-gallery" type="file" accept="image/*"><span class="field-help">Choose a photo from your album or use your phone's photo picker.</span></div><button id="save-profile-photo" class="primary" type="submit" disabled>Save profile photo</button></form><div class="notification-settings"><h3>Phone notifications</h3><p class="field-help">Get an alert when a new order arrives for staff or your order status changes.</p><button id="notification-toggle" class="secondary" type="button" disabled>Checking availability…</button><p id="notification-status" class="field-help" role="status">Checking this device's notification support.</p></div><div class="profile-details"><strong>${escapeHTML(profile.name)}</strong><span>${escapeHTML(profile.role)}</span><span>${escapeHTML(profile.email || "")}</span>${isCustomer ? `<span>${profile.role === "Student" ? "Grade" : "Department"}: ${escapeHTML(profile.grade || "")}</span><span>Section: ${escapeHTML(profile.section || "")}</span><span>${profile.role === "Student" ? "LRN" : "Employee ID"}: ${escapeHTML(profile.schoolId || "")}</span>` : ""}</div></section></div>`;
+  document.getElementById("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title"><div class="modal-head"><h2 id="profile-modal-title">Your profile</h2><button class="close-button" data-close aria-label="Close">×</button></div><div class="profile-photo-wrap">${avatar}</div><form id="profile-photo-form"><div class="field"><label for="profile-photo-gallery">Choose a photo from your gallery</label><input id="profile-photo-gallery" type="file" accept="image/*"><span class="field-help">Choose a photo from your album or use your phone's photo picker.</span></div><button id="save-profile-photo" class="primary" type="submit" disabled>Save profile photo</button></form><div class="notification-settings"><h3>Foreground order alerts</h3><p class="field-help">Get a device notification for new orders or status changes while CampuSnack is open on this device. Alerts do not arrive when the app is closed.</p><button id="notification-toggle" class="secondary" type="button" disabled>Loading alert setting…</button><p id="notification-status" class="field-help" role="status">Checking this device's notification setting.</p></div><div class="profile-details"><strong>${escapeHTML(profile.name)}</strong><span>${escapeHTML(profile.role)}</span><span>${escapeHTML(profile.email || "")}</span>${isCustomer ? `<span>${profile.role === "Student" ? "Grade" : "Department"}: ${escapeHTML(profile.grade || "")}</span><span>Section: ${escapeHTML(profile.section || "")}</span><span>${profile.role === "Student" ? "LRN" : "Employee ID"}: ${escapeHTML(profile.schoolId || "")}</span>` : ""}</div></section></div>`;
   bindModalClose();
-  document.getElementById("notification-toggle")?.addEventListener("click", event => toggleNotificationSubscription(event.currentTarget));
+  document.getElementById("notification-toggle")?.addEventListener("click", event => toggleForegroundNotifications(event.currentTarget));
   refreshNotificationControls();
   const saveButton = document.getElementById("save-profile-photo");
   const handleProfilePhoto = async fileInput => {
@@ -2582,14 +2551,6 @@ function resizeMenuImage(file) {
 }
 
 async function logout() {
-  if (realtimeEnabled && firebaseAuth.currentUser && profile) {
-    try {
-      await notificationTokenReference(profile.id).remove();
-    } catch (error) {
-      console.error("Unable to remove this device's notification registration during sign out.", error);
-      toast("Could not remove this device's notification registration. Check your connection and try again.");
-    }
-  }
   if (orderSubscription) {
     orderSubscription.off("value");
     orderSubscription = null;
@@ -2626,6 +2587,7 @@ window.addEventListener("storage", event => {
   if (event.key === STORAGE.orders && !realtimeEnabled) orders = read(STORAGE.orders, []);
   if (event.key === STORAGE.menu && !realtimeEnabled) menu = read(STORAGE.menu, initialMenu).filter(Boolean).map(cleanMenuItem);
   if (event.key === STORAGE.gcashQr && !realtimeEnabled) gcashQr = read(STORAGE.gcashQr, null);
+  if (event.key === STORAGE.foregroundNotifications) refreshNotificationControls();
   if (profile && !document.querySelector(".modal-backdrop")) render();
 });
 window.addEventListener("focus", () => {

@@ -48,21 +48,13 @@ Customers can cancel their own orders from **Order history** only while the stat
 
 This app does not connect to GCash or verify transfers automatically. Orders paid by QR remain blocked from preparation until staff confirms them. Never treat a customer screenshot alone as proof of payment, and do not upload account passwords, PINs, or other credentials. Use only a QR issued for the canteen's authorized receiving account.
 
-## Phone notifications
+## Foreground order alerts
 
-The app supports opt-in web push alerts for signed-in staff and customers. Staff receive a notification when a new order is created; customers receive one when their order status changes. Each person must enable notifications on each device from **Profile → Phone notifications**. Open the published HTTPS site to enable push; opening `index.html` directly from File Explorer cannot receive web push. On iPhone or iPad, install CampuSnack from Safari's **Share → Add to Home Screen**, open the installed app, and enable notifications there (iOS/iPadOS 16.4 or newer).
+Signed-in staff and customers can enable **Profile → Foreground order alerts** on each device. While CampuSnack is open and connected to Firebase, staff are alerted about new orders and customers are alerted when their order status changes. Alerts use the browser's notification permission and appear in the app as well as on the device when supported.
 
-Firebase Cloud Messaging and a Web Push key are configured in the public web-app settings. The public Firebase and VAPID settings are not service-account credentials. Order-event notifications are sent by the trusted Firebase Functions backend; no server credential belongs in the browser app.
+This foreground option uses the existing live Realtime Database connection and requires no Cloud Functions deployment or billing plan upgrade. It cannot deliver alerts while the app is closed, offline, or not signed in. Open the published HTTPS site (not `index.html` from File Explorer), allow notifications when prompted, and keep the app open. On iPhone or iPad, use the installed Home Screen app if required by the browser.
 
-To publish the notification backend and the database token rules:
-
-1. Enable Firebase billing on the **Blaze** plan if Firebase requires it for Cloud Functions. Review Firebase pricing and usage limits before upgrading; deployment can incur charges.
-2. Install Node.js 20. In a terminal, run `npm install -g firebase-tools`, then `firebase login` with an account that can deploy to the CampuSnack Firebase project.
-3. From the project root, run `npm install --prefix functions`.
-4. From the project root, run `firebase deploy --only functions,database`.
-5. Publish the updated static app files to GitHub Pages. Then sign in on each phone, open **Profile → Phone notifications**, and enable alerts.
-
-The functions notify only allowlisted staff at `/staffUids` and the customer who owns an order. They remove tokens that Firebase reports as invalid. Firebase Functions are not deployed by publishing the static GitHub Pages site alone.
+Background push notifications are a separate optional feature. They require a deployed trusted Firebase Functions backend and may require the Blaze billing plan; they are not used by foreground alerts.
 
 ## Points and sales reports
 
@@ -97,6 +89,6 @@ The included rules are a starting point for this demo. The app does not validate
 - In the staff **Menu** tab, choose or take menu photos through the phone's standard photo picker, or slide an item's delete control fully and confirm to remove it from the shared menu and stock tracker. Existing orders remain unchanged.
 - Profile picture and product photo forms each use one photo picker, avoiding duplicate camera controls on mobile.
 - Share the app link or its QR code from the **Share app** dialog. Share the QR image through the device share sheet when supported, or download it as a PNG.
-- Opt in to phone notifications from the profile on each staff or customer device.
+- Opt in to foreground order alerts from the profile on each staff or customer device; the app must remain open.
 - The app QR always points to `https://chels0506.github.io/campusnack/`. After publishing new files to that same URL, existing QR codes open the latest deployed version; app changes still need to be published to the hosting provider.
 - Save menu, profile, cart, and other local demo data in this browser.
