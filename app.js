@@ -60,15 +60,13 @@ function normalizePersonName(name) {
 }
 
 function employeeIdNameMatches(scannedName, enteredName) {
-  if (!scannedName) return true;
-  const scanned = normalizePersonName(scannedName).split(" ").filter(Boolean);
-  const entered = normalizePersonName(enteredName).split(" ").filter(Boolean);
+  if (!String(scannedName || "").trim()) return true;
+  const scanned = normalizePersonName(scannedName).split(" ").filter(token => token.length > 1);
+  const entered = normalizePersonName(enteredName).split(" ").filter(token => token.length > 1);
   if (!scanned.length || !entered.length) return false;
   const scannedSet = new Set(scanned);
   const enteredSet = new Set(entered);
-  if ([...enteredSet].every(token => scannedSet.has(token))) return true;
-  const intersection = [...enteredSet].filter(token => scannedSet.has(token)).length;
-  return intersection / Math.max(scannedSet.size, enteredSet.size) >= 0.8;
+  return [...enteredSet].every(token => scannedSet.has(token));
 }
 
 function extractEmployeeIdPayload(payload) {
@@ -77,16 +75,23 @@ function extractEmployeeIdPayload(payload) {
   let scannedCode = "";
   try {
     const parsed = JSON.parse(text);
-    scannedCode = String(parsed.employeeId || parsed.employeeID || parsed.id || parsed.code || "").replace(/\D/g, "");
+    scannedCode = String(parsed.employeeId || parsed.employeeID || parsed.employeeNo || parsed.employeeNumber || parsed.employee_no || parsed.id || parsed.code || "").replace(/\D/g, "");
     scannedName = String(parsed.name || parsed.fullName || parsed.owner || parsed["Employee Name"] || "").trim();
   } catch (error) {
     const nameMatch = text.match(/(?:name|owner)\s*[:=]\s*(.+?)(?:\||$)/i);
     if (nameMatch) scannedName = nameMatch[1].trim();
   }
   if (!scannedCode) {
-    const codeMatch = text.match(/(?:employee\s*(?:id|no\.?|number)|id)\s*[:=\s]*([0-9]{7})/i)
-      || text.match(/\b([0-9]{7})\b/);
-    scannedCode = codeMatch ? codeMatch[1] : "";
+    const employeeLabel = text.match(/employee\s*(?:id|no\.?|number)\s*[:=#-]?\s*/i);
+    if (employeeLabel) {
+      const followingText = text.slice(employeeLabel.index + employeeLabel[0].length);
+      const employeeNumber = followingText.match(/^\s*((?:[0-9][\s-]*){7})(?![0-9])/);
+      scannedCode = employeeNumber ? employeeNumber[1].replace(/\D/g, "") : "";
+    }
+    if (!scannedCode) {
+      const codeMatch = text.match(/\b([0-9]{7})\b/);
+      scannedCode = codeMatch ? codeMatch[1] : "";
+    }
   }
   return { scannedCode, scannedName };
 }
@@ -174,10 +179,16 @@ async function verifyCapturedEmployeeIdCard(inputId, nameInputId) {
     const result = await window.Tesseract.recognize(canvas.toDataURL("image/jpeg", 0.9), "eng");
     const text = String(result?.data?.text || "");
     const typedCode = String(document.getElementById(inputId)?.value || "").replace(/\D/g, "");
-    const codes = [...text.matchAll(/[0-9]{7}/g)].map(match => match[0]);
+    const employeeLabel = text.match(/employee\s*(?:id|no\.?|number)\s*[:=#-]?\s*/i);
+    const employeeNumberText = employeeLabel
+      ? text.slice(employeeLabel.index + employeeLabel[0].length).match(/^\s*((?:[0-9][\s-]*){7})(?![0-9])/)?.[1]
+      : "";
+    const codes = employeeNumberText
+      ? [employeeNumberText.replace(/\D/g, "")]
+      : [...text.matchAll(/\b[0-9]{7}\b/g)].map(match => match[0]);
     if (!/^[0-9]{7}$/.test(typedCode) || !codes.includes(typedCode)) {
       toast("The account is declined due to wrong employee ID.");
-      if (status) status.textContent = "The printed Employee ID did not contain the entered 7-digit code.";
+      if (status) status.textContent = "The printed Employee No. did not contain the entered 7-digit code.";
       return;
     }
     const nameInput = nameInputId ? document.getElementById(nameInputId) : null;
@@ -236,7 +247,7 @@ async function openEmployeeIdScanner(inputId, nameInputId) {
     return;
   }
   document.getElementById("modal-root").innerHTML =
-    `<div class="modal-backdrop" id="modal-backdrop"><section class="modal employee-id-modal" role="dialog" aria-modal="true" aria-labelledby="employee-id-title"><div class="modal-head"><h2 id="employee-id-title">Verify actual Employee ID</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle">Allow camera access, then show the Employee ID. The app will match the scanned code and can read the printed name and 7-digit code from the card.</p><div id="employee-id-camera-view" class="employee-id-camera-view"><video id="employee-id-video" playsinline muted></video><div id="employee-id-html5-view"></div></div><p id="employee-id-status" class="field-help" data-employee-id-status role="status">Requesting camera permission…</p><button id="capture-employee-id-card" class="primary" type="button">Capture and verify printed ID</button><button id="close-employee-id-scanner" class="secondary" type="button">Cancel scan</button></section></div>`;
+    `<div class="modal-backdrop" id="modal-backdrop"><section class="modal employee-id-modal" role="dialog" aria-modal="true" aria-labelledby="employee-id-title"><div class="modal-head"><h2 id="employee-id-title">Verify actual Employee ID</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle">Allow camera access, then show the Employee ID. The app matches the 7-digit printed Employee No. and checks the owner name when legible.</p><div id="employee-id-camera-view" class="employee-id-camera-view"><video id="employee-id-video" playsinline muted></video><div id="employee-id-html5-view"></div></div><p id="employee-id-status" class="field-help" data-employee-id-status role="status">Requesting camera permission…</p><button id="capture-employee-id-card" class="primary" type="button">Capture and verify printed ID</button><button id="close-employee-id-scanner" class="secondary" type="button">Cancel scan</button></section></div>`;
   bindModalClose();
   document.getElementById("close-employee-id-scanner")?.addEventListener("click", async () => {
     await stopEmployeeIdScanner();
@@ -573,7 +584,7 @@ function renderLogin(selectedRole = "Student") {
           ${selectedRole === "Staff" || !realtimeEnabled || customerAuthMode === "create" ? `<div class="field"><label for="full-name">Full name</label><input id="full-name" name="name" autocomplete="name" placeholder="e.g. Alex Santos" required></div>` : ""}
           <div class="field"><label for="email-address">Email address</label><input id="email-address" name="email" type="email" autocomplete="email" placeholder="you@example.com" required></div>
           ${selectedRole === "Staff" ? `
-            ${realtimeEnabled ? `<div class="field"><label for="staff-password">Password</label><input id="staff-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your staff account password" required></div>` : `<div class="field"><label for="school-id">Employee ID <span class="subtle">(optional)</span></label><input id="school-id" name="schoolId" autocomplete="off" inputmode="numeric" pattern="[0-9]{7}" maxlength="7" data-digit-limit="7" title="Employee ID must be exactly 7 digits" placeholder="7 digits"></div><div class="field"><label for="staff-code">Local demo staff code</label><input id="staff-code" name="staffCode" type="password" autocomplete="off" placeholder="Enter the local demo code" required><div class="staff-code-help">This code is not secure authentication and must not be used for a live queue.</div></div>`}
+            ${realtimeEnabled ? `<div class="field"><label for="staff-password">Password</label><input id="staff-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your staff account password" required></div>` : `<div class="field"><label for="school-id">Employee ID <span class="subtle">(optional)</span></label><input id="school-id" name="schoolId" autocomplete="off" inputmode="numeric" pattern="[0-9]{7}" maxlength="7" data-digit-limit="7" title="Employee ID must contain 7 digits" placeholder="Employee No."></div><div class="field"><label for="staff-code">Local demo staff code</label><input id="staff-code" name="staffCode" type="password" autocomplete="off" placeholder="Enter the local demo code" required><div class="staff-code-help">This code is not secure authentication and must not be used for a live queue.</div></div>`}
           ` : `
             ${realtimeEnabled ? `<div class="field"><label for="customer-password">Password</label><input id="customer-password" name="password" type="password" autocomplete="${customerAuthMode === "create" ? "new-password" : "current-password"}" minlength="${customerAuthMode === "create" ? 6 : 1}" placeholder="${customerAuthMode === "create" ? "At least 6 characters" : "Enter your password"}" required></div>` : ""}
             ${!realtimeEnabled || customerAuthMode === "create" ? `
@@ -581,7 +592,7 @@ function renderLogin(selectedRole = "Student") {
               <div class="field"><label for="grade-level">${selectedRole === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="grade-level" name="grade" placeholder="${selectedRole === "Teacher" ? "e.g. Mathematics" : "e.g. Grade 10"}" required></div>
               <div class="field"><label for="section">Section</label><input id="section" name="section" placeholder="e.g. Mabini" required></div>
             </div>
-            <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID" : "LRN"}</label><input id="school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${selectedRole === "Teacher" ? 7 : 12}}" maxlength="${selectedRole === "Teacher" ? 7 : 12}" data-digit-limit="${selectedRole === "Teacher" ? 7 : 12}" title="${selectedRole === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" placeholder="${selectedRole === "Teacher" ? "Enter 7-digit employee ID" : "Enter 12-digit LRN"}" required><div class="field-help">${selectedRole === "Teacher" ? "Enter exactly 7 digits, then scan the actual ID." : "Enter exactly 12 digits."}</div>${selectedRole === "Teacher" ? `<button id="scan-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div>
+            <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID / Employee No." : "LRN"}</label><input id="school-id" name="schoolId" inputmode="numeric" pattern="${selectedRole === "Teacher" ? "[0-9]{7}" : "[0-9]{12}"}" maxlength="${selectedRole === "Teacher" ? 7 : 12}" data-digit-limit="${selectedRole === "Teacher" ? 7 : 12}" title="${selectedRole === "Teacher" ? "Employee ID must contain exactly 7 digits" : "LRN must be exactly 12 digits"}" placeholder="${selectedRole === "Teacher" ? "Enter Employee No. from your card" : "Enter 12-digit LRN"}" required><div class="field-help">${selectedRole === "Teacher" ? "Enter the 7-digit Employee No. printed on your ID, then scan the actual ID." : "Enter exactly 12 digits."}</div>${selectedRole === "Teacher" ? `<button id="scan-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div>
             ` : ""}
           `}
           <label class="privacy-consent"><input id="data-privacy-consent" name="dataPrivacyConsent" type="checkbox" required><span>I have read and agree to the <strong>Data Privacy Notice</strong>. I consent to CampuSnack processing my account details and activity to provide the canteen service.</span></label>
@@ -609,7 +620,7 @@ function renderLogin(selectedRole = "Student") {
     document.getElementById("scan-employee-id")?.addEventListener("click", () => {
       const typedCode = String(document.getElementById("school-id")?.value || "").trim();
       if (!/^[0-9]{7}$/.test(typedCode)) {
-        toast("Enter the 7-digit Employee ID before scanning.");
+        toast("Enter the 7-digit Employee No. before scanning.");
         return;
       }
       void openEmployeeIdScanner("school-id", "full-name");
@@ -649,9 +660,10 @@ function renderLogin(selectedRole = "Student") {
     const name = String(form.get("name") || "").trim();
     const email = String(form.get("email") || "").trim();
     const schoolId = String(form.get("schoolId") || "").trim();
-    const requiredIdLength = role === "Student" ? 12 : role === "Teacher" ? 7 : 0;
+    const requiredIdLength = role === "Student" ? 12 : 0;
     const validateCustomerSchoolId = role !== "Staff" && (!realtimeEnabled || customerAuthMode === "create");
     if ((requiredIdLength && validateCustomerSchoolId && !new RegExp(`^\\d{${requiredIdLength}}$`).test(schoolId)) ||
+        (role === "Teacher" && validateCustomerSchoolId && !/^[0-9]{7}$/.test(schoolId)) ||
         (role === "Staff" && schoolId && !/^\d{7}$/.test(schoolId))) {
       toast(role === "Student" ? "LRN must contain exactly 12 digits." : "Employee ID must contain exactly 7 digits.");
       return;
@@ -775,7 +787,7 @@ function firebaseAuthErrorMessage(error, isCreateAccount) {
 
 function renderCustomerProfileSetup(role = "Student") {
   pendingCustomerRole = role;
-  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Complete your account</div><h1>Welcome to CampuSnack.</h1><p class="subtle">Your email account is ready. Add your school details to finish setting up your account.</p></div><div class="auth-illustration" aria-hidden="true">🍱</div></section><section class="auth-form-wrap"><form class="auth-form" id="customer-profile-form"><div class="eyebrow">School profile</div><h2>About you</h2><div class="role-switch auth-mode-switch" aria-label="Choose account type"><button type="button" class="${role === "Student" ? "active" : ""}" data-profile-role="Student">Student</button><button type="button" class="${role === "Teacher" ? "active" : ""}" data-profile-role="Teacher">Teacher</button></div><div class="field"><label for="profile-name">Full name</label><input id="profile-name" name="name" autocomplete="name" required></div><div class="field-grid"><div class="field"><label for="profile-grade">${role === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="profile-grade" name="grade" required></div><div class="field"><label for="profile-section">${role === "Teacher" ? "Department" : "Section"}</label><input id="profile-section" name="section" required></div></div><div class="field"><label for="profile-school-id">${role === "Teacher" ? "Employee ID" : "LRN"}</label><input id="profile-school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${role === "Teacher" ? 7 : 12}}" maxlength="${role === "Teacher" ? 7 : 12}" data-profile-digit-limit="${role === "Teacher" ? 7 : 12}" title="${role === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" required><div class="field-help">Enter exactly ${role === "Teacher" ? 7 : 12} digits${role === "Teacher" ? ", then scan the actual ID" : ""}.</div>${role === "Teacher" ? `<button id="scan-profile-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="profile-employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div><label class="privacy-consent"><input id="profile-data-privacy-consent" name="dataPrivacyConsent" type="checkbox" required><span>I have read and agree to the <strong>Data Privacy Notice</strong>. I consent to CampuSnack collecting and storing my name, email, school ID, grade or department, section, and account activity to provide the canteen ordering service.</span></label><button class="primary" type="submit" disabled>Save profile and continue</button></form></section></main><div id="modal-root"></div>`;
+  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Complete your account</div><h1>Welcome to CampuSnack.</h1><p class="subtle">Your email account is ready. Add your school details to finish setting up your account.</p></div><div class="auth-illustration" aria-hidden="true">🍱</div></section><section class="auth-form-wrap"><form class="auth-form" id="customer-profile-form"><div class="eyebrow">School profile</div><h2>About you</h2><div class="role-switch auth-mode-switch" aria-label="Choose account type"><button type="button" class="${role === "Student" ? "active" : ""}" data-profile-role="Student">Student</button><button type="button" class="${role === "Teacher" ? "active" : ""}" data-profile-role="Teacher">Teacher</button></div><div class="field"><label for="profile-name">Full name</label><input id="profile-name" name="name" autocomplete="name" required></div><div class="field-grid"><div class="field"><label for="profile-grade">${role === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="profile-grade" name="grade" required></div><div class="field"><label for="profile-section">${role === "Teacher" ? "Department" : "Section"}</label><input id="profile-section" name="section" required></div></div><div class="field"><label for="profile-school-id">${role === "Teacher" ? "Employee ID / Employee No." : "LRN"}</label><input id="profile-school-id" name="schoolId" inputmode="numeric" pattern="${role === "Teacher" ? "[0-9]{7}" : "[0-9]{12}"}" maxlength="${role === "Teacher" ? 7 : 12}" data-profile-digit-limit="${role === "Teacher" ? 7 : 12}" title="${role === "Teacher" ? "Employee ID must contain exactly 7 digits" : "LRN must be exactly 12 digits"}" required><div class="field-help">${role === "Teacher" ? "Enter the 7-digit Employee No. printed on your ID, then scan the actual ID." : "Enter exactly 12 digits."}</div>${role === "Teacher" ? `<button id="scan-profile-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="profile-employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div><label class="privacy-consent"><input id="profile-data-privacy-consent" name="dataPrivacyConsent" type="checkbox" required><span>I have read and agree to the <strong>Data Privacy Notice</strong>. I consent to CampuSnack collecting and storing my name, email, school ID, grade or department, section, and account activity to provide the canteen ordering service.</span></label><button class="primary" type="submit" disabled>Save profile and continue</button></form></section></main><div id="modal-root"></div>`;
   document.querySelectorAll("[data-profile-role]").forEach(button => button.addEventListener("click", () => renderCustomerProfileSetup(button.dataset.profileRole)));
   document.querySelector("[data-profile-digit-limit]")?.addEventListener("input", event => {
     const input = event.currentTarget;
@@ -790,7 +802,7 @@ function renderCustomerProfileSetup(role = "Student") {
   document.getElementById("scan-profile-employee-id")?.addEventListener("click", () => {
     const typedCode = String(document.getElementById("profile-school-id")?.value || "").trim();
     if (!/^[0-9]{7}$/.test(typedCode)) {
-      toast("Enter the 7-digit Employee ID before scanning.");
+      toast("Enter the 7-digit Employee No. before scanning.");
       return;
     }
     void openEmployeeIdScanner("profile-school-id", "profile-name");
@@ -819,8 +831,8 @@ function renderCustomerProfileSetup(role = "Student") {
     const data = new FormData(event.currentTarget);
     const schoolId = String(data.get("schoolId") || "").trim();
     const name = String(data.get("name") || "").trim();
-    const requiredLength = pendingCustomerRole === "Student" ? 12 : 7;
-    if (!new RegExp(`^\\d{${requiredLength}}$`).test(schoolId)) {
+    const validSchoolId = pendingCustomerRole === "Student" ? /^\d{12}$/.test(schoolId) : /^[0-9]{7}$/.test(schoolId);
+    if (!validSchoolId) {
       toast(pendingCustomerRole === "Student" ? "LRN must contain exactly 12 digits." : "Employee ID must contain exactly 7 digits.");
       return;
     }
