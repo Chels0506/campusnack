@@ -154,6 +154,9 @@ h1 { font-size:34px; margin:7px 0 5px; }
 .employee-id-modal #capture-employee-id-card,
 .employee-id-modal #close-employee-id-scanner { width:100%; margin-top:9px; }
 .auth-notice { margin-top:14px; border-radius:10px; padding:11px; background:#f5f2e7; color:#777055; font-size:11px; line-height:1.5; }
+.privacy-consent { display:flex; align-items:flex-start; gap:9px; margin:14px 0 12px; padding:12px; border:1px solid #dfe6d8; border-radius:10px; background:#f7f9f2; color:#55635a; font-size:11px; line-height:1.55; cursor:pointer; }
+.privacy-consent input { flex:0 0 auto; width:18px; height:18px; margin:1px 0 0; accent-color:var(--green); cursor:pointer; }
+.privacy-consent strong { color:var(--green); }
 .staff-code-help { color:#8b6a36; font-size:11px; margin-top:6px; }
 .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:#203d30; color:white; padding:12px 18px; border-radius:10px; z-index:20; box-shadow:var(--shadow); font-size:13px; animation:toast-in .2s ease-out; }
 @keyframes toast-in { from { opacity:0; transform:translate(-50%,10px); } to { opacity:1; transform:translate(-50%,0); } }

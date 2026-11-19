@@ -584,7 +584,8 @@ function renderLogin(selectedRole = "Student") {
             <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID" : "LRN"}</label><input id="school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${selectedRole === "Teacher" ? 7 : 12}}" maxlength="${selectedRole === "Teacher" ? 7 : 12}" data-digit-limit="${selectedRole === "Teacher" ? 7 : 12}" title="${selectedRole === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" placeholder="${selectedRole === "Teacher" ? "Enter 7-digit employee ID" : "Enter 12-digit LRN"}" required><div class="field-help">${selectedRole === "Teacher" ? "Enter exactly 7 digits, then scan the actual ID." : "Enter exactly 12 digits."}</div>${selectedRole === "Teacher" ? `<button id="scan-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div>
             ` : ""}
           `}
-          <button class="primary" type="submit" ${realtimeSetupError ? "disabled" : ""}>${selectedRole === "Staff" ? "Sign in as Canteen Staff" : realtimeEnabled ? customerAuthMode === "create" ? `Create ${selectedRole} Account` : "Sign in" : `Continue as ${selectedRole}`}</button>
+          ${selectedRole !== "Staff" && realtimeEnabled && customerAuthMode === "create" ? `<label class="privacy-consent"><input id="data-privacy-consent" name="dataPrivacyConsent" type="checkbox" required><span>I have read and agree to the <strong>Data Privacy Notice</strong>. I consent to CampuSnack collecting and storing my name, email, school ID, grade or department, section, and account activity to provide the canteen ordering service.</span></label>` : ""}
+          <button class="primary" type="submit" ${(realtimeSetupError || (selectedRole !== "Staff" && realtimeEnabled && customerAuthMode === "create")) ? "disabled" : ""}>${selectedRole === "Staff" ? "Sign in as Canteen Staff" : realtimeEnabled ? customerAuthMode === "create" ? `Create ${selectedRole} Account` : "Sign in" : `Continue as ${selectedRole}`}</button>
           <div class="auth-notice">${realtimeSetupError ? "Firebase setup is unavailable. Correct the configuration or restore the Firebase SDK connection, then reload. Sign-in is disabled." : realtimeEnabled ? selectedRole === "Staff" ? "Staff use their Firebase Email/Password account. Only staff accounts on the database allowlist can access staff tools." : "Customer accounts use Firebase Email/Password. Use an email address you can access and keep your password private." : "Local demo only: account information is not verified and is saved only in this browser on this device."}</div>
         </form>
       </section>
@@ -623,6 +624,13 @@ function renderLogin(selectedRole = "Student") {
     });
     bindShareApp();
     bindInstallApp();
+    const privacyConsent = document.getElementById("data-privacy-consent");
+    const loginSubmitButton = document.querySelector("#login-form button[type='submit']");
+    if (privacyConsent && loginSubmitButton) {
+      privacyConsent.addEventListener("change", () => {
+        loginSubmitButton.disabled = !privacyConsent.checked || Boolean(realtimeSetupError);
+      });
+    }
     document.getElementById("login-form").addEventListener("submit", async event => {
     event.preventDefault();
     if (realtimeSetupError) {
@@ -630,6 +638,10 @@ function renderLogin(selectedRole = "Student") {
       return;
     }
     const form = new FormData(event.currentTarget);
+    if (role !== "Staff" && realtimeEnabled && customerAuthMode === "create" && !privacyConsent?.checked) {
+      toast("Approve the Data Privacy Notice before creating your account.");
+      return;
+    }
     if (role === "Staff" && !realtimeEnabled && form.get("staffCode") !== STAFF_CODE) {
       toast("That staff code isn't correct.");
       return;
@@ -763,7 +775,7 @@ function firebaseAuthErrorMessage(error, isCreateAccount) {
 
 function renderCustomerProfileSetup(role = "Student") {
   pendingCustomerRole = role;
-  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Complete your account</div><h1>Welcome to CampuSnack.</h1><p class="subtle">Your email account is ready. Add your school details to finish setting up your account.</p></div><div class="auth-illustration" aria-hidden="true">🍱</div></section><section class="auth-form-wrap"><form class="auth-form" id="customer-profile-form"><div class="eyebrow">School profile</div><h2>About you</h2><div class="role-switch auth-mode-switch" aria-label="Choose account type"><button type="button" class="${role === "Student" ? "active" : ""}" data-profile-role="Student">Student</button><button type="button" class="${role === "Teacher" ? "active" : ""}" data-profile-role="Teacher">Teacher</button></div><div class="field"><label for="profile-name">Full name</label><input id="profile-name" name="name" autocomplete="name" required></div><div class="field-grid"><div class="field"><label for="profile-grade">${role === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="profile-grade" name="grade" required></div><div class="field"><label for="profile-section">${role === "Teacher" ? "Department" : "Section"}</label><input id="profile-section" name="section" required></div></div><div class="field"><label for="profile-school-id">${role === "Teacher" ? "Employee ID" : "LRN"}</label><input id="profile-school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${role === "Teacher" ? 7 : 12}}" maxlength="${role === "Teacher" ? 7 : 12}" data-profile-digit-limit="${role === "Teacher" ? 7 : 12}" title="${role === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" required><div class="field-help">Enter exactly ${role === "Teacher" ? 7 : 12} digits${role === "Teacher" ? ", then scan the actual ID" : ""}.</div>${role === "Teacher" ? `<button id="scan-profile-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="profile-employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div><button class="primary" type="submit">Save profile and continue</button></form></section></main><div id="modal-root"></div>`;
+  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Complete your account</div><h1>Welcome to CampuSnack.</h1><p class="subtle">Your email account is ready. Add your school details to finish setting up your account.</p></div><div class="auth-illustration" aria-hidden="true">🍱</div></section><section class="auth-form-wrap"><form class="auth-form" id="customer-profile-form"><div class="eyebrow">School profile</div><h2>About you</h2><div class="role-switch auth-mode-switch" aria-label="Choose account type"><button type="button" class="${role === "Student" ? "active" : ""}" data-profile-role="Student">Student</button><button type="button" class="${role === "Teacher" ? "active" : ""}" data-profile-role="Teacher">Teacher</button></div><div class="field"><label for="profile-name">Full name</label><input id="profile-name" name="name" autocomplete="name" required></div><div class="field-grid"><div class="field"><label for="profile-grade">${role === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="profile-grade" name="grade" required></div><div class="field"><label for="profile-section">${role === "Teacher" ? "Department" : "Section"}</label><input id="profile-section" name="section" required></div></div><div class="field"><label for="profile-school-id">${role === "Teacher" ? "Employee ID" : "LRN"}</label><input id="profile-school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${role === "Teacher" ? 7 : 12}}" maxlength="${role === "Teacher" ? 7 : 12}" data-profile-digit-limit="${role === "Teacher" ? 7 : 12}" title="${role === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" required><div class="field-help">Enter exactly ${role === "Teacher" ? 7 : 12} digits${role === "Teacher" ? ", then scan the actual ID" : ""}.</div>${role === "Teacher" ? `<button id="scan-profile-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="profile-employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div><label class="privacy-consent"><input id="profile-data-privacy-consent" name="dataPrivacyConsent" type="checkbox" required><span>I have read and agree to the <strong>Data Privacy Notice</strong>. I consent to CampuSnack collecting and storing my name, email, school ID, grade or department, section, and account activity to provide the canteen ordering service.</span></label><button class="primary" type="submit" disabled>Save profile and continue</button></form></section></main><div id="modal-root"></div>`;
   document.querySelectorAll("[data-profile-role]").forEach(button => button.addEventListener("click", () => renderCustomerProfileSetup(button.dataset.profileRole)));
   document.querySelector("[data-profile-digit-limit]")?.addEventListener("input", event => {
     const input = event.currentTarget;
@@ -791,8 +803,19 @@ function renderCustomerProfileSetup(role = "Student") {
       if (status) status.textContent = "Employee ID has not been scanned.";
     }
   });
+  const profilePrivacyConsent = document.getElementById("profile-data-privacy-consent");
+  const profileSubmitButton = document.querySelector("#customer-profile-form button[type='submit']");
+  if (profilePrivacyConsent && profileSubmitButton) {
+    profilePrivacyConsent.addEventListener("change", () => {
+      profileSubmitButton.disabled = !profilePrivacyConsent.checked;
+    });
+  }
   document.getElementById("customer-profile-form").addEventListener("submit", async event => {
     event.preventDefault();
+    if (!profilePrivacyConsent?.checked) {
+      toast("Approve the Data Privacy Notice before saving your profile.");
+      return;
+    }
     const data = new FormData(event.currentTarget);
     const schoolId = String(data.get("schoolId") || "").trim();
     const name = String(data.get("name") || "").trim();
