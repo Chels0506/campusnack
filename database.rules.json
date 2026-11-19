@@ -1,5 +1,12 @@
 {
   "rules": {
+    "studentDirectory": {
+      "$lrn": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider === 'password'",
+        ".write": false,
+        ".validate": "$lrn.matches(/^[0-9]{12}$/)"
+      }
+    },
     "staffUids": {
       ".read": false,
       ".write": false
@@ -15,7 +22,7 @@
       "$uid": {
         ".read": "auth != null && auth.uid === $uid && auth.token.firebase.sign_in_provider === 'password'",
         ".write": "auth != null && auth.uid === $uid && auth.token.firebase.sign_in_provider === 'password'",
-        ".validate": "newData.hasChildren(['id', 'name', 'grade', 'section', 'schoolId', 'role', 'email', 'updatedAt']) && newData.child('id').val() === $uid && newData.child('name').isString() && newData.child('grade').isString() && newData.child('section').isString() && newData.child('schoolId').isString() && ((newData.child('role').val() === 'Student' && newData.child('schoolId').val().matches(/^[0-9]{12}$/) && root.child('studentLrnClaims').child(newData.child('schoolId').val()).val() === $uid) || (newData.child('role').val() === 'Teacher' && newData.child('schoolId').val().matches(/^[0-9]{7}$/) && root.child('teacherEmployeeIdClaims').child(newData.child('schoolId').val()).val() === $uid)) && newData.child('email').isString() && newData.child('updatedAt').isNumber() && (!newData.child('photoData').exists() || (newData.child('photoData').isString() && newData.child('photoData').val().length <= 300000))"
+        ".validate": "newData.hasChildren(['id', 'name', 'grade', 'section', 'schoolId', 'role', 'email', 'updatedAt']) && newData.child('id').val() === $uid && newData.child('name').isString() && newData.child('grade').isString() && newData.child('section').isString() && newData.child('schoolId').isString() && ((newData.child('role').val() === 'Student' && newData.child('schoolId').val().matches(/^[0-9]{12}$/) && root.child('studentDirectory').child(newData.child('schoolId').val()).exists() && root.child('studentLrnClaims').child(newData.child('schoolId').val()).val() === $uid) || (newData.child('role').val() === 'Teacher' && newData.child('schoolId').val().matches(/^[0-9]{7}$/) && root.child('teacherEmployeeIdClaims').child(newData.child('schoolId').val()).val() === $uid)) && newData.child('email').isString() && newData.child('updatedAt').isNumber() && (!newData.child('photoData').exists() || (newData.child('photoData').isString() && newData.child('photoData').val().length <= 300000))"
       }
     },
     "profilePhotos": {

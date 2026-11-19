@@ -45,6 +45,58 @@ const write = (key, value) => {
     toast("Could not save your changes on this device.");
   }
 };
+
+function normalizeStudentName(name) {
+  return String(name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
+}
+
+function studentNameMatches(recordNames, enteredName) {
+  const entered = normalizeStudentName(enteredName).split(" ").filter(token => token && token.length > 1);
+  if (!entered.length) return false;
+  const enteredSet = new Set(entered);
+  return (Array.isArray(recordNames) ? recordNames : [recordNames]).some(recordName => {
+    const record = normalizeStudentName(recordName).split(" ").filter(token => token && token.length > 1);
+    if (!record.length) return false;
+    const recordSet = new Set(record);
+    if ([...enteredSet].every(token => recordSet.has(token)) && [...recordSet].every(token => enteredSet.has(token))) return true;
+    const union = new Set([...enteredSet, ...recordSet]);
+    const intersection = [...enteredSet].filter(token => recordSet.has(token)).length;
+    return union.size > 0 && intersection / union.size >= 0.8;
+  });
+}
+
+async function validateStudentIdentity(lrn, name) {
+  if (!/^\d{12}$/.test(String(lrn || ""))) {
+    toast("LRN must contain exactly 12 digits.");
+    return false;
+  }
+  let record = null;
+  const bundledDirectory = window.CAMPUSNACK_STUDENT_DIRECTORY;
+  record = bundledDirectory?.[lrn] || null;
+  if (!record && !bundledDirectory && realtimeEnabled && ordersDatabase) {
+    try {
+      record = (await ordersDatabase.ref("studentDirectory").child(lrn).once("value")).val();
+    } catch (error) {
+      console.error("Unable to verify the student LRN.", error);
+      toast("Could not verify the LRN. Check the connection and try again.");
+      return false;
+    }
+  }
+  if (!record) {
+    toast("This LRN is not in the approved school list. Account registration is declined.");
+    return false;
+  }
+  if (!studentNameMatches(record.names, name)) {
+    toast("The LRN and full name do not match. Check both details and try again.");
+    return false;
+  }
+  return true;
+}
 let menu = read(STORAGE.menu, initialMenu).filter(Boolean).map(cleanMenuItem);
 let orders = read(STORAGE.orders, []);
 let profile = read(STORAGE.profile, null);
@@ -352,6 +404,9 @@ function renderLogin(selectedRole = "Student") {
         return;
       }
     }
+    if (role === "Student" && (!realtimeEnabled || customerAuthMode === "create")) {
+      if (!(await validateStudentIdentity(schoolId, name))) return;
+    }
     const roleKey = role.toLowerCase();
     const finishLocalSignIn = () => {
       let userId = `${roleKey}:${(schoolId || name).toLowerCase()}`;
@@ -469,6 +524,9 @@ async function saveCustomerProfile(user, customerProfile) {
   if (!user) {
     toast("Your signed-in session expired. Sign in again.");
     renderLogin();
+    return false;
+  }
+  if (customerProfile.role === "Student" && !(await validateStudentIdentity(customerProfile.schoolId, customerProfile.name))) {
     return false;
   }
   const savedProfile = {
