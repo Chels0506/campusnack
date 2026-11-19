@@ -88,11 +88,11 @@ async function validateStudentIdentity(lrn, name) {
     }
   }
   if (!record) {
-    toast("This LRN is not in the approved school list. Account registration is declined.");
+    toast("The account is declined due to wrong LRN.");
     return false;
   }
   if (!studentNameMatches(record.names, name)) {
-    toast("The LRN and full name do not match. Check both details and try again.");
+    toast("The account is declined due to wrong LRN.");
     return false;
   }
   return true;
@@ -375,11 +375,8 @@ function renderLogin(selectedRole = "Student") {
       toast("That staff code isn't correct.");
       return;
     }
+    const name = String(form.get("name") || "").trim();
     const email = String(form.get("email") || "").trim();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-      toast("Enter a valid email address.");
-      return;
-    }
     const schoolId = String(form.get("schoolId") || "").trim();
     const requiredIdLength = role === "Student" ? 12 : role === "Teacher" ? 7 : 0;
     const validateCustomerSchoolId = role !== "Staff" && (!realtimeEnabled || customerAuthMode === "create");
@@ -388,7 +385,13 @@ function renderLogin(selectedRole = "Student") {
       toast(role === "Student" ? "LRN must contain exactly 12 digits." : "Employee ID must contain exactly 7 digits.");
       return;
     }
-    const name = String(form.get("name") || "").trim();
+    if (role === "Student" && (!realtimeEnabled || customerAuthMode === "create")) {
+      if (!(await validateStudentIdentity(schoolId, name))) return;
+    }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      toast("Enter a valid email address.");
+      return;
+    }
     let customerDetails = null;
     if (role !== "Staff" && customerAuthMode === "create") {
       customerDetails = {
@@ -403,9 +406,6 @@ function renderLogin(selectedRole = "Student") {
         toast("Complete your name, grade or department, and section.");
         return;
       }
-    }
-    if (role === "Student" && (!realtimeEnabled || customerAuthMode === "create")) {
-      if (!(await validateStudentIdentity(schoolId, name))) return;
     }
     const roleKey = role.toLowerCase();
     const finishLocalSignIn = () => {
@@ -504,13 +504,15 @@ function renderCustomerProfileSetup(role = "Student") {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const schoolId = String(data.get("schoolId") || "").trim();
+    const name = String(data.get("name") || "").trim();
     const requiredLength = pendingCustomerRole === "Student" ? 12 : 7;
     if (!new RegExp(`^\\d{${requiredLength}}$`).test(schoolId)) {
       toast(pendingCustomerRole === "Student" ? "LRN must contain exactly 12 digits." : "Employee ID must contain exactly 7 digits.");
       return;
     }
+    if (pendingCustomerRole === "Student" && !(await validateStudentIdentity(schoolId, name))) return;
     await saveCustomerProfile(pendingCustomerUser, {
-      name: String(data.get("name") || "").trim(),
+      name,
       grade: String(data.get("grade") || "").trim(),
       section: String(data.get("section") || "").trim(),
       schoolId,
