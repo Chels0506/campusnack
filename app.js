@@ -55,6 +55,42 @@ function normalizeStudentName(name) {
     .trim();
 }
 
+function normalizePersonName(name) {
+  return normalizeStudentName(name);
+}
+
+function employeeIdNameMatches(scannedName, enteredName) {
+  if (!scannedName) return true;
+  const scanned = normalizePersonName(scannedName).split(" ").filter(Boolean);
+  const entered = normalizePersonName(enteredName).split(" ").filter(Boolean);
+  if (!scanned.length || !entered.length) return false;
+  const scannedSet = new Set(scanned);
+  const enteredSet = new Set(entered);
+  if ([...enteredSet].every(token => scannedSet.has(token))) return true;
+  const intersection = [...enteredSet].filter(token => scannedSet.has(token)).length;
+  return intersection / Math.max(scannedSet.size, enteredSet.size) >= 0.8;
+}
+
+function extractEmployeeIdPayload(payload) {
+  const text = String(payload || "").trim();
+  let scannedName = "";
+  let scannedCode = "";
+  try {
+    const parsed = JSON.parse(text);
+    scannedCode = String(parsed.employeeId || parsed.employeeID || parsed.id || parsed.code || "").replace(/\D/g, "");
+    scannedName = String(parsed.name || parsed.fullName || parsed.owner || parsed["Employee Name"] || "").trim();
+  } catch (error) {
+    const nameMatch = text.match(/(?:name|owner)\s*[:=]\s*(.+?)(?:\||$)/i);
+    if (nameMatch) scannedName = nameMatch[1].trim();
+  }
+  if (!scannedCode) {
+    const codeMatch = text.match(/(?:employee\s*(?:id|no\.?|number)|id)\s*[:=\s]*([0-9]{7})/i)
+      || text.match(/\b([0-9]{7})\b/);
+    scannedCode = codeMatch ? codeMatch[1] : "";
+  }
+  return { scannedCode, scannedName };
+}
+
 function studentNameMatches(recordNames, enteredName) {
   const entered = normalizeStudentName(enteredName).split(" ").filter(token => token && token.length > 1);
   if (!entered.length) return false;
@@ -68,6 +104,203 @@ function studentNameMatches(recordNames, enteredName) {
     const intersection = [...enteredSet].filter(token => recordSet.has(token)).length;
     return union.size > 0 && intersection / union.size >= 0.8;
   });
+}
+
+async function loadEmployeeIdScannerLibrary() {
+  if (window.Html5Qrcode) return;
+  await new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-employee-id-scanner]');
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", () => reject(new Error("The employee ID scanner could not load.")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.dataset.employeeIdScanner = "true";
+    script.src = "https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js";
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("The employee ID scanner could not load."));
+    document.head.append(script);
+  });
+}
+
+async function stopEmployeeIdScanner() {
+  if (employeeIdHtml5Scanner) {
+    try {
+      await employeeIdHtml5Scanner.stop();
+    } catch (error) {
+      console.error("Unable to stop the employee ID scanner.", error);
+    }
+    employeeIdHtml5Scanner = null;
+  }
+  if (employeeIdScanStream) {
+    employeeIdScanStream.getTracks().forEach(track => track.stop());
+    employeeIdScanStream = null;
+  }
+}
+
+async function loadEmployeeIdOcr() {
+  if (window.Tesseract) return;
+  await new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-employee-id-ocr]');
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", () => reject(new Error("Employee ID text recognition could not load.")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.dataset.employeeIdOcr = "true";
+    script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("Employee ID text recognition could not load."));
+    document.head.append(script);
+  });
+}
+
+async function verifyCapturedEmployeeIdCard(inputId, nameInputId) {
+  const video = document.getElementById("employee-id-video");
+  const status = document.getElementById("employee-id-status");
+  if (!video?.videoWidth) {
+    toast("Hold the Employee ID card in front of the camera, then capture it.");
+    return;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  if (status) status.textContent = "Reading the printed Employee ID…";
+  try {
+    await loadEmployeeIdOcr();
+    const result = await window.Tesseract.recognize(canvas.toDataURL("image/jpeg", 0.9), "eng");
+    const text = String(result?.data?.text || "");
+    const typedCode = String(document.getElementById(inputId)?.value || "").replace(/\D/g, "");
+    const codes = [...text.matchAll(/[0-9]{7}/g)].map(match => match[0]);
+    if (!/^[0-9]{7}$/.test(typedCode) || !codes.includes(typedCode)) {
+      toast("The account is declined due to wrong employee ID.");
+      if (status) status.textContent = "The printed Employee ID did not contain the entered 7-digit code.";
+      return;
+    }
+    const nameInput = nameInputId ? document.getElementById(nameInputId) : null;
+    if (!employeeIdNameMatches(text, nameInput?.value || "")) {
+      toast("The account is declined due to wrong employee ID.");
+      if (status) status.textContent = "The printed name does not match the entered full name.";
+      return;
+    }
+    employeeIdScannedCode = typedCode;
+    employeeIdScannedName = nameInput?.value || "";
+    if (status) status.textContent = `Verified printed Employee ID: ${typedCode}`;
+    toast("Employee ID card and name verified.");
+    await stopEmployeeIdScanner();
+    document.getElementById("modal-root")?.replaceChildren();
+  } catch (error) {
+    console.error("Employee ID OCR failed.", error);
+    if (status) status.textContent = "Text recognition failed. Use the card's QR or barcode scan instead.";
+  }
+}
+
+function acceptEmployeeIdScan(payload, inputId, nameInputId) {
+  const { scannedCode, scannedName } = extractEmployeeIdPayload(payload);
+  if (!/^[0-9]{7}$/.test(scannedCode)) {
+    toast("No valid 7-digit Employee ID was found on the scanned code.");
+    return false;
+  }
+  const input = document.getElementById(inputId);
+  const typedCode = String(input?.value || "").replace(/\D/g, "");
+  if (!typedCode || scannedCode !== typedCode) {
+    toast("The account is declined due to wrong employee ID.");
+    return false;
+  }
+  const nameInput = nameInputId ? document.getElementById(nameInputId) : null;
+  if (scannedName && nameInput && !employeeIdNameMatches(scannedName, nameInput.value)) {
+    toast("The account is declined due to wrong employee ID.");
+    return false;
+  }
+  employeeIdScannedCode = scannedCode;
+  employeeIdScannedName = scannedName;
+  input.value = scannedCode;
+  const status = document.querySelector("[data-employee-id-status]");
+  if (status) status.textContent = `Verified scanned Employee ID: ${scannedCode}`;
+  toast("Employee ID scanned and matched.");
+  void stopEmployeeIdScanner();
+  document.getElementById("modal-root")?.replaceChildren();
+  return true;
+}
+
+async function openEmployeeIdScanner(inputId, nameInputId) {
+  if (!window.isSecureContext) {
+    toast("Camera scanning requires HTTPS or localhost.");
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    toast("This browser cannot use the camera for Employee ID scanning.");
+    return;
+  }
+  document.getElementById("modal-root").innerHTML =
+    `<div class="modal-backdrop" id="modal-backdrop"><section class="modal employee-id-modal" role="dialog" aria-modal="true" aria-labelledby="employee-id-title"><div class="modal-head"><h2 id="employee-id-title">Verify actual Employee ID</h2><button class="close-button" data-close aria-label="Close">×</button></div><p class="subtle">Allow camera access, then show the Employee ID. The app will match the scanned code and can read the printed name and 7-digit code from the card.</p><div id="employee-id-camera-view" class="employee-id-camera-view"><video id="employee-id-video" playsinline muted></video><div id="employee-id-html5-view"></div></div><p id="employee-id-status" class="field-help" data-employee-id-status role="status">Requesting camera permission…</p><button id="capture-employee-id-card" class="primary" type="button">Capture and verify printed ID</button><button id="close-employee-id-scanner" class="secondary" type="button">Cancel scan</button></section></div>`;
+  bindModalClose();
+  document.getElementById("close-employee-id-scanner")?.addEventListener("click", async () => {
+    await stopEmployeeIdScanner();
+    document.getElementById("modal-root").innerHTML = "";
+  });
+  document.getElementById("capture-employee-id-card")?.addEventListener("click", () => {
+    void verifyCapturedEmployeeIdCard(inputId, nameInputId);
+  });
+  try {
+    employeeIdScanStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false
+    });
+  } catch (error) {
+    console.error("Employee ID camera permission failed.", error);
+    const status = document.getElementById("employee-id-status");
+    if (status) status.textContent = "Camera permission denied or unavailable.";
+    toast("Camera permission is required to verify the Employee ID.");
+    return;
+  }
+  const status = document.getElementById("employee-id-status");
+  if (status) status.textContent = "Camera ready. Hold the Employee ID code inside the frame.";
+  const video = document.getElementById("employee-id-video");
+  video.srcObject = employeeIdScanStream;
+  await video.play().catch(() => {});
+  let nativeDetector = null;
+  if ("BarcodeDetector" in window) {
+    try {
+      nativeDetector = new BarcodeDetector({ formats: ["ean_13", "code_128", "qr_code", "ean_8", "upc_a", "upc_e"] });
+    } catch (error) {
+      console.error("Native Employee ID barcode detector is unavailable.", error);
+    }
+  }
+  if (nativeDetector) {
+    let scanning = true;
+    const scanNative = async () => {
+      if (!scanning || !employeeIdScanStream) return;
+      try {
+        const codes = await nativeDetector.detect(video);
+        if (codes.length) {
+          scanning = false;
+          acceptEmployeeIdScan(codes[0].rawValue, inputId, nameInputId);
+          return;
+        }
+      } catch (error) {
+        console.error("Employee ID native scan failed.", error);
+      }
+      setTimeout(scanNative, 300);
+    };
+    scanNative();
+    return;
+  }
+  try {
+    await loadEmployeeIdScannerLibrary();
+    employeeIdHtml5Scanner = new Html5Qrcode("employee-id-html5-view");
+    await employeeIdHtml5Scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 220, height: 220 } },
+      payload => acceptEmployeeIdScan(payload, inputId, nameInputId)
+    );
+  } catch (error) {
+    console.error("Employee ID fallback scanner failed.", error);
+    if (status) status.textContent = "The scanner could not start. Check camera permissions and HTTPS.";
+  }
 }
 
 async function validateStudentIdentity(lrn, name) {
@@ -113,6 +346,10 @@ let customerTab = "Menu";
 let staffTab = "Orders";
 let toastTimer;
 let installPrompt = null;
+let employeeIdScanStream = null;
+let employeeIdHtml5Scanner = null;
+let employeeIdScannedCode = "";
+let employeeIdScannedName = "";
 let firebaseAuth = null;
 let ordersDatabase = null;
 let orderSubscription = null;
@@ -344,7 +581,7 @@ function renderLogin(selectedRole = "Student") {
               <div class="field"><label for="grade-level">${selectedRole === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="grade-level" name="grade" placeholder="${selectedRole === "Teacher" ? "e.g. Mathematics" : "e.g. Grade 10"}" required></div>
               <div class="field"><label for="section">Section</label><input id="section" name="section" placeholder="e.g. Mabini" required></div>
             </div>
-            <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID" : "LRN"}</label><input id="school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${selectedRole === "Teacher" ? 7 : 12}}" maxlength="${selectedRole === "Teacher" ? 7 : 12}" data-digit-limit="${selectedRole === "Teacher" ? 7 : 12}" title="${selectedRole === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" placeholder="${selectedRole === "Teacher" ? "Enter 7-digit employee ID" : "Enter 12-digit LRN"}" required><div class="field-help">${selectedRole === "Teacher" ? "Enter exactly 7 digits." : "Enter exactly 12 digits."}</div></div>
+            <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID" : "LRN"}</label><input id="school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${selectedRole === "Teacher" ? 7 : 12}}" maxlength="${selectedRole === "Teacher" ? 7 : 12}" data-digit-limit="${selectedRole === "Teacher" ? 7 : 12}" title="${selectedRole === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" placeholder="${selectedRole === "Teacher" ? "Enter 7-digit employee ID" : "Enter 12-digit LRN"}" required><div class="field-help">${selectedRole === "Teacher" ? "Enter exactly 7 digits, then scan the actual ID." : "Enter exactly 12 digits."}</div>${selectedRole === "Teacher" ? `<button id="scan-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div>
             ` : ""}
           `}
           <button class="primary" type="submit" ${realtimeSetupError ? "disabled" : ""}>${selectedRole === "Staff" ? "Sign in as Canteen Staff" : realtimeEnabled ? customerAuthMode === "create" ? `Create ${selectedRole} Account` : "Sign in" : `Continue as ${selectedRole}`}</button>
@@ -361,7 +598,29 @@ function renderLogin(selectedRole = "Student") {
     }));
     document.querySelectorAll("[data-digit-limit]").forEach(input => input.addEventListener("input", () => {
       input.value = input.value.replace(/\D/g, "").slice(0, Number(input.dataset.digitLimit));
+      if (input.id === "school-id" && role === "Teacher") {
+        employeeIdScannedCode = "";
+        employeeIdScannedName = "";
+        const status = document.querySelector("[data-employee-id-status]");
+        if (status) status.textContent = "Employee ID has not been scanned.";
+      }
     }));
+    document.getElementById("scan-employee-id")?.addEventListener("click", () => {
+      const typedCode = String(document.getElementById("school-id")?.value || "").trim();
+      if (!/^[0-9]{7}$/.test(typedCode)) {
+        toast("Enter the 7-digit Employee ID before scanning.");
+        return;
+      }
+      void openEmployeeIdScanner("school-id", "full-name");
+    });
+    document.getElementById("full-name")?.addEventListener("input", () => {
+      if (role === "Teacher") {
+        employeeIdScannedCode = "";
+        employeeIdScannedName = "";
+        const status = document.querySelector("[data-employee-id-status]");
+        if (status) status.textContent = "Employee ID has not been scanned.";
+      }
+    });
     bindShareApp();
     bindInstallApp();
     document.getElementById("login-form").addEventListener("submit", async event => {
@@ -384,6 +643,16 @@ function renderLogin(selectedRole = "Student") {
         (role === "Staff" && schoolId && !/^\d{7}$/.test(schoolId))) {
       toast(role === "Student" ? "LRN must contain exactly 12 digits." : "Employee ID must contain exactly 7 digits.");
       return;
+    }
+    if (role === "Teacher" && (!realtimeEnabled || customerAuthMode === "create")) {
+      if (!/^[0-9]{7}$/.test(employeeIdScannedCode) || employeeIdScannedCode !== schoolId) {
+        toast("The account is declined due to wrong employee ID.");
+        return;
+      }
+      if (!employeeIdNameMatches(employeeIdScannedName, name)) {
+        toast("The account is declined due to wrong employee ID.");
+        return;
+      }
     }
     if (role === "Student" && (!realtimeEnabled || customerAuthMode === "create")) {
       if (!(await validateStudentIdentity(schoolId, name))) return;
@@ -494,11 +763,33 @@ function firebaseAuthErrorMessage(error, isCreateAccount) {
 
 function renderCustomerProfileSetup(role = "Student") {
   pendingCustomerRole = role;
-  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Complete your account</div><h1>Welcome to CampuSnack.</h1><p class="subtle">Your email account is ready. Add your school details to finish setting up your account.</p></div><div class="auth-illustration" aria-hidden="true">🍱</div></section><section class="auth-form-wrap"><form class="auth-form" id="customer-profile-form"><div class="eyebrow">School profile</div><h2>About you</h2><div class="role-switch auth-mode-switch" aria-label="Choose account type"><button type="button" class="${role === "Student" ? "active" : ""}" data-profile-role="Student">Student</button><button type="button" class="${role === "Teacher" ? "active" : ""}" data-profile-role="Teacher">Teacher</button></div><div class="field"><label for="profile-name">Full name</label><input id="profile-name" name="name" autocomplete="name" required></div><div class="field-grid"><div class="field"><label for="profile-grade">${role === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="profile-grade" name="grade" required></div><div class="field"><label for="profile-section">Section</label><input id="profile-section" name="section" required></div></div><div class="field"><label for="profile-school-id">${role === "Teacher" ? "Employee ID" : "LRN"}</label><input id="profile-school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${role === "Teacher" ? 7 : 12}}" maxlength="${role === "Teacher" ? 7 : 12}" data-profile-digit-limit="${role === "Teacher" ? 7 : 12}" title="${role === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" required><div class="field-help">Enter exactly ${role === "Teacher" ? 7 : 12} digits.</div></div><button class="primary" type="submit">Save profile and continue</button></form></section></main><div id="modal-root"></div>`;
+  document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Complete your account</div><h1>Welcome to CampuSnack.</h1><p class="subtle">Your email account is ready. Add your school details to finish setting up your account.</p></div><div class="auth-illustration" aria-hidden="true">🍱</div></section><section class="auth-form-wrap"><form class="auth-form" id="customer-profile-form"><div class="eyebrow">School profile</div><h2>About you</h2><div class="role-switch auth-mode-switch" aria-label="Choose account type"><button type="button" class="${role === "Student" ? "active" : ""}" data-profile-role="Student">Student</button><button type="button" class="${role === "Teacher" ? "active" : ""}" data-profile-role="Teacher">Teacher</button></div><div class="field"><label for="profile-name">Full name</label><input id="profile-name" name="name" autocomplete="name" required></div><div class="field-grid"><div class="field"><label for="profile-grade">${role === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="profile-grade" name="grade" required></div><div class="field"><label for="profile-section">${role === "Teacher" ? "Department" : "Section"}</label><input id="profile-section" name="section" required></div></div><div class="field"><label for="profile-school-id">${role === "Teacher" ? "Employee ID" : "LRN"}</label><input id="profile-school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${role === "Teacher" ? 7 : 12}}" maxlength="${role === "Teacher" ? 7 : 12}" data-profile-digit-limit="${role === "Teacher" ? 7 : 12}" title="${role === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" required><div class="field-help">Enter exactly ${role === "Teacher" ? 7 : 12} digits${role === "Teacher" ? ", then scan the actual ID" : ""}.</div>${role === "Teacher" ? `<button id="scan-profile-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="profile-employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div><button class="primary" type="submit">Save profile and continue</button></form></section></main><div id="modal-root"></div>`;
   document.querySelectorAll("[data-profile-role]").forEach(button => button.addEventListener("click", () => renderCustomerProfileSetup(button.dataset.profileRole)));
   document.querySelector("[data-profile-digit-limit]")?.addEventListener("input", event => {
     const input = event.currentTarget;
     input.value = input.value.replace(/\D/g, "").slice(0, Number(input.dataset.profileDigitLimit));
+    if (pendingCustomerRole === "Teacher") {
+      employeeIdScannedCode = "";
+      employeeIdScannedName = "";
+      const status = document.querySelector("[data-employee-id-status]");
+      if (status) status.textContent = "Employee ID has not been scanned.";
+    }
+  });
+  document.getElementById("scan-profile-employee-id")?.addEventListener("click", () => {
+    const typedCode = String(document.getElementById("profile-school-id")?.value || "").trim();
+    if (!/^[0-9]{7}$/.test(typedCode)) {
+      toast("Enter the 7-digit Employee ID before scanning.");
+      return;
+    }
+    void openEmployeeIdScanner("profile-school-id", "profile-name");
+  });
+  document.getElementById("profile-name")?.addEventListener("input", () => {
+    if (pendingCustomerRole === "Teacher") {
+      employeeIdScannedCode = "";
+      employeeIdScannedName = "";
+      const status = document.querySelector("[data-employee-id-status]");
+      if (status) status.textContent = "Employee ID has not been scanned.";
+    }
   });
   document.getElementById("customer-profile-form").addEventListener("submit", async event => {
     event.preventDefault();
@@ -509,6 +800,16 @@ function renderCustomerProfileSetup(role = "Student") {
     if (!new RegExp(`^\\d{${requiredLength}}$`).test(schoolId)) {
       toast(pendingCustomerRole === "Student" ? "LRN must contain exactly 12 digits." : "Employee ID must contain exactly 7 digits.");
       return;
+    }
+    if (pendingCustomerRole === "Teacher") {
+      if (!/^[0-9]{7}$/.test(employeeIdScannedCode) || employeeIdScannedCode !== schoolId) {
+        toast("The account is declined due to wrong employee ID.");
+        return;
+      }
+      if (!employeeIdNameMatches(employeeIdScannedName, name)) {
+        toast("The account is declined due to wrong employee ID.");
+        return;
+      }
     }
     if (pendingCustomerRole === "Student" && !(await validateStudentIdentity(schoolId, name))) return;
     await saveCustomerProfile(pendingCustomerUser, {
@@ -530,6 +831,16 @@ async function saveCustomerProfile(user, customerProfile) {
   }
   if (customerProfile.role === "Student" && !(await validateStudentIdentity(customerProfile.schoolId, customerProfile.name))) {
     return false;
+  }
+  if (customerProfile.role === "Teacher") {
+    if (!/^[0-9]{7}$/.test(employeeIdScannedCode) || employeeIdScannedCode !== customerProfile.schoolId) {
+      toast("The account is declined due to wrong employee ID.");
+      return false;
+    }
+    if (!employeeIdNameMatches(employeeIdScannedName, customerProfile.name)) {
+      toast("The account is declined due to wrong employee ID.");
+      return false;
+    }
   }
   const savedProfile = {
     ...customerProfile,
@@ -1055,9 +1366,15 @@ function openTracker(orderId) {
 
 function modalMarkup() { return `<div id="modal-root"></div>`; }
 function bindModalClose() {
-  document.querySelector("[data-close]")?.addEventListener("click", () => document.getElementById("modal-root").innerHTML = "");
+  document.querySelector("[data-close]")?.addEventListener("click", () => {
+    void stopEmployeeIdScanner();
+    document.getElementById("modal-root").innerHTML = "";
+  });
   document.getElementById("modal-backdrop")?.addEventListener("click", event => {
-    if (event.target.id === "modal-backdrop") event.currentTarget.remove();
+    if (event.target.id === "modal-backdrop") {
+      void stopEmployeeIdScanner();
+      event.currentTarget.remove();
+    }
   });
 }
 
