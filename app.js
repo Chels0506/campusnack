@@ -69,6 +69,14 @@ function employeeIdNameMatches(scannedName, enteredName) {
   return [...enteredSet].every(token => scannedSet.has(token));
 }
 
+function extractLabeledEmployeeNo(text) {
+  const label = /employee\s*(?:id|no\.?|number)\s*[.:#-]*\s*/i.exec(String(text || ""));
+  if (!label) return "";
+  const followingText = String(text).slice(label.index + label[0].length);
+  const number = /^\s*((?:[0-9][\s-]*){7})(?![0-9])/.exec(followingText);
+  return number ? number[1].replace(/\D/g, "") : "";
+}
+
 function extractEmployeeIdPayload(payload) {
   const text = String(payload || "").trim();
   let scannedName = "";
@@ -82,16 +90,7 @@ function extractEmployeeIdPayload(payload) {
     if (nameMatch) scannedName = nameMatch[1].trim();
   }
   if (!scannedCode) {
-    const employeeLabel = text.match(/employee\s*(?:id|no\.?|number)\s*[:=#-]?\s*/i);
-    if (employeeLabel) {
-      const followingText = text.slice(employeeLabel.index + employeeLabel[0].length);
-      const employeeNumber = followingText.match(/^\s*((?:[0-9][\s-]*){7})(?![0-9])/);
-      scannedCode = employeeNumber ? employeeNumber[1].replace(/\D/g, "") : "";
-    }
-    if (!scannedCode) {
-      const codeMatch = text.match(/\b([0-9]{7})\b/);
-      scannedCode = codeMatch ? codeMatch[1] : "";
-    }
+    scannedCode = extractLabeledEmployeeNo(text) || (/^[0-9]{7}$/.test(text) ? text : "");
   }
   return { scannedCode, scannedName };
 }
@@ -179,16 +178,12 @@ async function verifyCapturedEmployeeIdCard(inputId, nameInputId) {
     const result = await window.Tesseract.recognize(canvas.toDataURL("image/jpeg", 0.9), "eng");
     const text = String(result?.data?.text || "");
     const typedCode = String(document.getElementById(inputId)?.value || "").replace(/\D/g, "");
-    const employeeLabel = text.match(/employee\s*(?:id|no\.?|number)\s*[:=#-]?\s*/i);
-    const employeeNumberText = employeeLabel
-      ? text.slice(employeeLabel.index + employeeLabel[0].length).match(/^\s*((?:[0-9][\s-]*){7})(?![0-9])/)?.[1]
-      : "";
-    const codes = employeeNumberText
-      ? [employeeNumberText.replace(/\D/g, "")]
-      : [...text.matchAll(/\b[0-9]{7}\b/g)].map(match => match[0]);
-    if (!/^[0-9]{7}$/.test(typedCode) || !codes.includes(typedCode)) {
+    const printedEmployeeNo = extractLabeledEmployeeNo(text);
+    if (!/^[0-9]{7}$/.test(typedCode) || printedEmployeeNo !== typedCode) {
       toast("The account is declined due to wrong employee ID.");
-      if (status) status.textContent = "The printed Employee No. did not contain the entered 7-digit code.";
+      if (status) status.textContent = printedEmployeeNo
+        ? "The printed Employee No. does not match the entered Employee ID."
+        : "Could not read a 7-digit number beside the Employee No. label. Hold the card steady and capture it again.";
       return;
     }
     const nameInput = nameInputId ? document.getElementById(nameInputId) : null;
@@ -212,7 +207,7 @@ async function verifyCapturedEmployeeIdCard(inputId, nameInputId) {
 function acceptEmployeeIdScan(payload, inputId, nameInputId) {
   const { scannedCode, scannedName } = extractEmployeeIdPayload(payload);
   if (!/^[0-9]{7}$/.test(scannedCode)) {
-    toast("No valid 7-digit Employee ID was found on the scanned code.");
+    toast("No valid 7-digit Employee No. was found on the scanned code.");
     return false;
   }
   const input = document.getElementById(inputId);
