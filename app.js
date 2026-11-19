@@ -584,8 +584,8 @@ function renderLogin(selectedRole = "Student") {
             <div class="field"><label for="school-id">${selectedRole === "Teacher" ? "Employee ID" : "LRN"}</label><input id="school-id" name="schoolId" inputmode="numeric" pattern="[0-9]{${selectedRole === "Teacher" ? 7 : 12}}" maxlength="${selectedRole === "Teacher" ? 7 : 12}" data-digit-limit="${selectedRole === "Teacher" ? 7 : 12}" title="${selectedRole === "Teacher" ? "Employee ID must be exactly 7 digits" : "LRN must be exactly 12 digits"}" placeholder="${selectedRole === "Teacher" ? "Enter 7-digit employee ID" : "Enter 12-digit LRN"}" required><div class="field-help">${selectedRole === "Teacher" ? "Enter exactly 7 digits, then scan the actual ID." : "Enter exactly 12 digits."}</div>${selectedRole === "Teacher" ? `<button id="scan-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div>
             ` : ""}
           `}
-          ${selectedRole !== "Staff" && realtimeEnabled && customerAuthMode === "create" ? `<label class="privacy-consent"><input id="data-privacy-consent" name="dataPrivacyConsent" type="checkbox" required><span>I have read and agree to the <strong>Data Privacy Notice</strong>. I consent to CampuSnack collecting and storing my name, email, school ID, grade or department, section, and account activity to provide the canteen ordering service.</span></label>` : ""}
-          <button class="primary" type="submit" ${(realtimeSetupError || (selectedRole !== "Staff" && realtimeEnabled && customerAuthMode === "create")) ? "disabled" : ""}>${selectedRole === "Staff" ? "Sign in as Canteen Staff" : realtimeEnabled ? customerAuthMode === "create" ? `Create ${selectedRole} Account` : "Sign in" : `Continue as ${selectedRole}`}</button>
+          <label class="privacy-consent"><input id="data-privacy-consent" name="dataPrivacyConsent" type="checkbox" required><span>I have read and agree to the <strong>Data Privacy Notice</strong>. I consent to CampuSnack processing my account details and activity to provide the canteen service.</span></label>
+          <button class="primary" type="submit" disabled>${selectedRole === "Staff" ? "Sign in as Canteen Staff" : realtimeEnabled ? customerAuthMode === "create" ? `Create ${selectedRole} Account` : "Sign in" : `Continue as ${selectedRole}`}</button>
           <div class="auth-notice">${realtimeSetupError ? "Firebase setup is unavailable. Correct the configuration or restore the Firebase SDK connection, then reload. Sign-in is disabled." : realtimeEnabled ? selectedRole === "Staff" ? "Staff use their Firebase Email/Password account. Only staff accounts on the database allowlist can access staff tools." : "Customer accounts use Firebase Email/Password. Use an email address you can access and keep your password private." : "Local demo only: account information is not verified and is saved only in this browser on this device."}</div>
         </form>
       </section>
@@ -638,8 +638,8 @@ function renderLogin(selectedRole = "Student") {
       return;
     }
     const form = new FormData(event.currentTarget);
-    if (role !== "Staff" && realtimeEnabled && customerAuthMode === "create" && !privacyConsent?.checked) {
-      toast("Approve the Data Privacy Notice before creating your account.");
+    if (!privacyConsent?.checked) {
+      toast("Approve the Data Privacy Notice before signing in or creating an account.");
       return;
     }
     if (role === "Staff" && !realtimeEnabled && form.get("staffCode") !== STAFF_CODE) {
