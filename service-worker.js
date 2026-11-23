@@ -1,4 +1,4 @@
-const CACHE_NAME = "campusnack-shell-v35";
+const CACHE_NAME = "campusnack-shell-v36";
 const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./student-directory.js", "./firebase-public-config.js", "./firebase-config.js", "./manifest.json", "./campusnack-logo.jpg", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-maskable-512.png", "./icons/apple-touch-icon.png"];
 
 try {

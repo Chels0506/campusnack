@@ -727,7 +727,10 @@ function renderLogin(selectedRole = "Student") {
         const credential = await firebaseAuth.createUserWithEmailAndPassword(email, password);
         pendingCustomerUser = credential.user;
         const saved = await saveCustomerProfile(credential.user, customerDetails);
-        if (!saved) {
+        if (saved === "retry") {
+          pendingCustomerRole = role;
+          renderCustomerProfileSetup(role, customerDetails);
+        } else if (!saved) {
           try {
             await credential.user.delete();
             await firebaseAuth.signOut();
@@ -780,9 +783,20 @@ function firebaseAuthErrorMessage(error, isCreateAccount) {
   }
 }
 
-function renderCustomerProfileSetup(role = "Student") {
+function renderCustomerProfileSetup(role = "Student", initialProfile = null) {
   pendingCustomerRole = role;
   document.getElementById("app").innerHTML = `<main class="auth-wrap"><section class="auth-art"><div class="brand" style="color:white"><img src="campusnack-logo.jpg" alt="">Campu<em>Snack</em></div><div><div class="eyebrow" style="color:#d6ef9f">Complete your account</div><h1>Welcome to CampuSnack.</h1><p class="subtle">Your email account is ready. Add your school details to finish setting up your account.</p></div><div class="auth-illustration" aria-hidden="true">🍱</div></section><section class="auth-form-wrap"><form class="auth-form" id="customer-profile-form"><div class="eyebrow">School profile</div><h2>About you</h2><div class="role-switch auth-mode-switch" aria-label="Choose account type"><button type="button" class="${role === "Student" ? "active" : ""}" data-profile-role="Student">Student</button><button type="button" class="${role === "Teacher" ? "active" : ""}" data-profile-role="Teacher">Teacher</button></div><div class="field"><label for="profile-name">Full name</label><input id="profile-name" name="name" autocomplete="name" required></div><div class="field-grid"><div class="field"><label for="profile-grade">${role === "Teacher" ? "Department / grade" : "Grade level"}</label><input id="profile-grade" name="grade" required></div><div class="field"><label for="profile-section">${role === "Teacher" ? "Department" : "Section"}</label><input id="profile-section" name="section" required></div></div><div class="field"><label for="profile-school-id">${role === "Teacher" ? "Employee ID / Employee No." : "LRN"}</label><input id="profile-school-id" name="schoolId" inputmode="numeric" pattern="${role === "Teacher" ? "[0-9]{7}" : "[0-9]{12}"}" maxlength="${role === "Teacher" ? 7 : 12}" data-profile-digit-limit="${role === "Teacher" ? 7 : 12}" title="${role === "Teacher" ? "Employee ID must contain exactly 7 digits" : "LRN must be exactly 12 digits"}" required><div class="field-help">${role === "Teacher" ? "Enter the 7-digit Employee No. printed on your ID, then scan the actual ID." : "Enter exactly 12 digits."}</div>${role === "Teacher" ? `<button id="scan-profile-employee-id" class="secondary scan-employee-id-button" type="button">Scan actual Employee ID</button><p id="profile-employee-id-status" class="field-help" data-employee-id-status role="status">Employee ID has not been scanned.</p>` : ""}</div><label class="privacy-consent"><input id="profile-data-privacy-consent" name="dataPrivacyConsent" type="checkbox" required><span>I have read and agree to the <strong>Data Privacy Notice</strong>. I consent to CampuSnack collecting and storing my name, email, school ID, grade or department, section, and account activity to provide the canteen ordering service.</span></label><button class="primary" type="submit" disabled>Save profile and continue</button></form></section></main><div id="modal-root"></div>`;
+  if (initialProfile) {
+    document.getElementById("profile-name").value = initialProfile.name || "";
+    document.getElementById("profile-grade").value = initialProfile.grade || "";
+    document.getElementById("profile-section").value = initialProfile.section || "";
+    document.getElementById("profile-school-id").value = initialProfile.schoolId || "";
+    if (role === "Teacher" && employeeIdScannedCode === initialProfile.schoolId &&
+        employeeIdNameMatches(employeeIdScannedName, initialProfile.name)) {
+      const status = document.getElementById("profile-employee-id-status");
+      if (status) status.textContent = `Verified printed Employee No.: ${employeeIdScannedCode}`;
+    }
+  }
   document.querySelectorAll("[data-profile-role]").forEach(button => button.addEventListener("click", () => renderCustomerProfileSetup(button.dataset.profileRole)));
   document.querySelector("[data-profile-digit-limit]")?.addEventListener("input", event => {
     const input = event.currentTarget;
@@ -910,10 +924,11 @@ async function saveCustomerProfile(user, customerProfile) {
         console.error("Unable to release the LRN reservation after profile save failed.", rollbackError);
       }
     }
-    toast(error.code === "PERMISSION_DENIED" || error.code === "permission_denied"
-      ? `Could not reserve this ${schoolIdLabel}. It may already be in use, or the latest Firebase rules may not be published.`
-      : "Your account is signed in, but the school profile could not be saved. Check Firebase database rules and try again.");
-    return false;
+    const permissionDenied = String(error.code || "").toUpperCase().includes("PERMISSION_DENIED");
+    toast(permissionDenied
+      ? `Firebase denied saving the school profile. Check the Realtime Database rules for customerProfiles and ${schoolIdClaimPath}, then retry.`
+      : `The school profile could not be saved (${error.message || "Firebase connection error"}). Your sign-in account is still active; retry after checking the connection.`);
+    return "retry";
   }
 }
 
