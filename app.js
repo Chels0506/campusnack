@@ -893,21 +893,15 @@ async function saveCustomerProfile(user, customerProfile) {
     updatedAt: Date.now()
   };
   let schoolIdClaimed = false;
+  let savingStep = "claim";
   const schoolIdClaimPath = savedProfile.role === "Student" ? "studentLrnClaims" : "teacherEmployeeIdClaims";
   const schoolIdLabel = savedProfile.role === "Student" ? "LRN" : "employee ID";
   try {
     if (savedProfile.role === "Student" || savedProfile.role === "Teacher") {
-      const claimResult = await ordersDatabase.ref(schoolIdClaimPath).child(savedProfile.schoolId).transaction(
-        currentOwner => currentOwner === null || currentOwner === user.uid ? user.uid : undefined,
-        undefined,
-        false
-      );
-      if (!claimResult.committed || claimResult.snapshot.val() !== user.uid) {
-        toast(`This ${schoolIdLabel} is already linked to another account. Each ${schoolIdLabel} can be used only once.`);
-        return false;
-      }
+      await ordersDatabase.ref(schoolIdClaimPath).child(savedProfile.schoolId).set(user.uid);
       schoolIdClaimed = true;
     }
+    savingStep = "profile";
     await ordersDatabase.ref("customerProfiles").child(user.uid).set(savedProfile);
     finishCustomerSignIn(user, savedProfile);
     return true;
@@ -915,18 +909,16 @@ async function saveCustomerProfile(user, customerProfile) {
     console.error("Unable to save the signed-in customer's school profile.", error);
     if (schoolIdClaimed) {
       try {
-        await ordersDatabase.ref(schoolIdClaimPath).child(savedProfile.schoolId).transaction(
-          currentOwner => currentOwner === user.uid ? null : currentOwner,
-          undefined,
-          false
-        );
+        await ordersDatabase.ref(schoolIdClaimPath).child(savedProfile.schoolId).remove();
       } catch (rollbackError) {
-        console.error("Unable to release the LRN reservation after profile save failed.", rollbackError);
+        console.error(`Unable to release the ${schoolIdLabel} reservation after profile save failed.`, rollbackError);
       }
     }
     const permissionDenied = String(error.code || "").toUpperCase().includes("PERMISSION_DENIED");
     toast(permissionDenied
-      ? `Firebase denied saving the school profile. Check the Realtime Database rules for customerProfiles and ${schoolIdClaimPath}, then retry.`
+      ? savingStep === "claim"
+        ? `Firebase could not reserve this ${schoolIdLabel}. It may already be linked to another account. If it is not, publish the latest Realtime Database rules and retry.`
+        : `Firebase denied saving the school profile. Check the Realtime Database rules for customerProfiles, then retry.`
       : `The school profile could not be saved (${error.message || "Firebase connection error"}). Your sign-in account is still active; retry after checking the connection.`);
     return "retry";
   }
